@@ -1,4 +1,4 @@
-f"""
+"""
 CARE-CRITIC 실행 스크립트 
 인풋으로 환자 텍스트 받아서 분석 main.py
 환자 텍스트는 
@@ -29,8 +29,10 @@ report generator 에서 리포트 생성 json 형식으로 저장
 
 comparator = CohortComparator(model="mistralai/Mistral-7B-Instruct-v0.3")
 """
+
 import sys
 import os
+## 추후 모듈들에 __init__.py 추가하여 정석적 방식으로 수정 예정
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 

@@ -1,6 +1,7 @@
 """
 Critique Reasoner - 비판적 분석 모듈
 환자 정보를 cohort_comparator의 similar_case_patterns 결과와 비교하여 비판 포인트 생성
+## 추후 모델명을 조절하는 modelinfo.py 생성하는 것이 나을 것으로 보임.
 """
 
 from typing import Dict, List
@@ -51,6 +52,8 @@ class CritiqueReasoner:
                 return result.get('generated_text', 'No response')
             else:
                 return str(result)
+        except:#빠져서 파이썬 버전에 따라 충돌날까봐 임의로 추가해둠
+            pass 
                 
     
     def critique(
