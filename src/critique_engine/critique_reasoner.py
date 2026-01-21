@@ -18,13 +18,7 @@ class CritiqueReasoner:
     """
     
     def __init__(self, model: str = "mistralai/Mistral-7B-Instruct-v0.3"):
-        """
-        Critique Reasoner 초기화
-        
-        Args:
-            model: Hugging Face 모델 이름
-                - "mistralai/Mistral-7B-Instruct-v0.3"
-        """
+
         self.model = model
         self.api_url = f"https://api-inference.huggingface.co/models/{model}"
     
@@ -134,15 +128,28 @@ Patient Case:
 
 {patient_summary}
 
-Task: Extract structured evidence only. Return JSON with:
-- evidence_spans: {{span_id: {{section, quote}}}}
-- decision_points: [{{dp_id, time_hint, decision, rationale_span_ids, missing_info}}]
-- uncertainties: [string]
+Task: Extract the following from the clinical text:
 
-Rules:
-- Use short, exact quotes from the text for evidence_spans.
-- If information is missing, list it in missing_info.
-- Keep JSON only, no extra text.
+1. **EVIDENCE_SPANS**: Key clinical findings mentioned in the text
+   - Symptoms, vital signs, lab results, imaging findings, diagnoses
+   - Format: {{span_id: {{section: "category", quote: "exact text"}}}}
+
+2. **DECISION_POINTS**: Treatment/diagnostic decisions made by clinicians
+   - Examples: medication orders, procedures, consultations, discharge plans
+   - For each decision, identify:
+     - What was decided
+     - When (time_hint)
+     - Which evidence_spans justify this decision
+     - What information was missing but needed
+
+3. **UNCERTAINTIES**: Information gaps or ambiguous findings in the record
+
+Return JSON only:
+{{
+  "evidence_spans": {{}},
+  "decision_points": [],
+  "uncertainties": []
+}}
 """
 
     def _build_stage2_prompt(
@@ -176,17 +183,32 @@ Stage 1 Evidence (JSON):
 
 {cohort_summary}
 
-Task: Generate JSON with:
-- analysis
-- critique_points (each must include span_id or "record_uncertainty")
-- risk_factors
-- recommendations
+Task: Generate a critical review comparing this patient to similar cases. Return JSON with:
+
+1. **analysis** (string): 
+   - Overall assessment of the patient's clinical course
+   - Compare patient's treatment decisions with patterns from similar cases
+   - Highlight key differences between this patient and the cohort
+
+2. **critique_points** (array of objects):
+   - Each critique must identify a potential issue, gap, or concern in patient care
+   - Structure: {{"point": "description", "span_id": "E1 or record_uncertainty", "severity": "high/medium/low", "cohort_comparison": "how similar cases differed"}}
+   - Examples of critiques: delayed treatment, missing diagnostic tests, deviation from common successful patterns, incomplete documentation
+
+3. **risk_factors** (array of strings):
+   - Patient-specific factors that increase risk (from evidence_spans)
+   - Factors where this patient differs negatively from survived cases in cohort
+
+4. **recommendations** (array of strings):
+   - Actionable suggestions based on successful patterns from similar cases
+   - Address each critique_point with a specific recommendation
+   - Prioritize recommendations by potential impact on outcome
 
 Rules:
-- Every critique_point must cite at least one span_id OR "record_uncertainty".
-- If possible, mention cohort pattern evidence.
-- Do NOT claim death/survival as ground truth.
-- JSON only, no extra text.
+- Every critique_point MUST cite at least one span_id from Stage 1 OR use "record_uncertainty" if based on missing information.
+- Support critiques with cohort pattern evidence when available.
+- Do NOT assume or claim death/survival as ground truth - focus on process, not outcome.
+- Return valid JSON only, no additional text.
 """
 
     def _extract_patient_evidence(self, patient_data: Dict, stream: bool = False) -> Dict:
