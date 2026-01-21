@@ -22,6 +22,7 @@ langgraph>=0.0.1
 
 # 설정 파일
 pyyaml>=6.0
+python-dotenv>=1.0.0
 
 # 유틸리티
 tqdm>=4.65.0

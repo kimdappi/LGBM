@@ -10,8 +10,13 @@ f"""
 
 from typing import List, Dict
 from collections import Counter
+from pathlib import Path
+from datetime import datetime
 import requests
 import json
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 
 class CohortComparator:
@@ -20,42 +25,51 @@ class CohortComparator:
     
     rag_retriever에서 검색된 유사 케이스를 받아서 
     코호트 간 치료 패턴 비교하고 생존/사망 통계 분석
+    OpenAI API 사용 (임시)
     """
     
-    def __init__(self, model: str = "mistralai/Mistral-7B-Instruct-v0.3"):
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None):
         """
         코호트 비교기 초기화
+        
+        Args:
+            model: OpenAI 모델명 (gpt-4o-mini, gpt-4o, gpt-3.5-turbo)
+            api_key: OpenAI API 키 (없으면 환경변수 OPENAI_API_KEY 사용)
         """
         self.model = model
-        self.api_url = f"https://api-inference.huggingface.co/models/{model}"
+        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     
-    def _call_hf_api(self, prompt: str) -> str:
-        """Hugging Face Inference API 호출 (무료, API 키 불필요)"""
+    def _call_llm_api(self, prompt: str) -> str:
+        """OpenAI API 호출"""
+        
+        if not self.api_key:
+            print("OPENAI_API_KEY가 설정되지 않았습니다.")
+            return None
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
         
         payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 6000,
-                "temperature": 0.3,
-                "return_full_text": False
-            }
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4000
         }
         
         try:
-            response = requests.post(self.api_url, json=payload)
+            response = requests.post(self.api_url, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
-            
-            # 응답 형식에 따라 처리
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get('generated_text', 'No response')
-            elif isinstance(result, dict):
-                return result.get('generated_text', 'No response')
-            else:
-                return str(result)
+            return result["choices"][0]["message"]["content"]
                 
         except Exception as e:
-            print(f"  ⚠️  Hugging Face API 호출 실패: {e}")
+            print(f"OpenAI API 호출 실패: {e}")
+            return None
     
     def analyze_cohort(self, cohort_data: Dict) -> Dict:
         """
@@ -64,8 +78,8 @@ class CohortComparator:
         Args:
             cohort_data: retriever에서 반환된 데이터
                 {
-                    'similar_cases': [...],
-                    'stats': {...}
+                    'similar_cases': [...], #케이스 metadata + text
+                    'stats': {...} #생존통계
                 }
         
         Returns:
@@ -81,96 +95,144 @@ class CohortComparator:
         similar_cases = cohort_data['similar_cases']
         stats = cohort_data['stats']
         
-        if not similar_cases:
-            return self._empty_result()
+        # 사망 생존 통계, 인구통계학적 패턴, 입원 패턴 등 메타데이터 기준으로 텍스트 패턴 분석
+        statistics_based_analysis = self._analyze_with_llm(similar_cases)
+        print(" 통계 기반 분석 완료")
         
-        # 1. 생존 통계
-        survival_stats = self._analyze_survival(similar_cases, stats)
-        print("  ✓ 생존 통계 분석 완료")
-        
-        # 2. 인구통계학적 패턴
-        demographic_patterns = self._analyze_demographics(similar_cases)
-        print("  ✓ 인구통계학적 패턴 분석 완료")
-        
-        # 3. 입원 패턴
-        admission_patterns = self._analyze_admission(similar_cases)
-        print("  ✓ 입원 패턴 분석 완료")
-        
-        # 4. 임상 패턴 (HF LLM 분석)
+        # 임상 패턴 (HF LLM 분석)
         clinical_patterns = self._analyze_clinical_text_with_llm(similar_cases)
-        print("  ✓ 임상 패턴 LLM 분석 완료")
+        print("임상 패턴 LLM 분석 완료")
         
-        # 5. 결과 비교 (생존 vs 사망)
+        # 결과 패턴 비교
         outcome_comparison = self._compare_outcomes_with_llm(similar_cases)
-        print("  ✓ 결과 비교 LLM 분석 완료")
+        print("결과 비교 LLM 분석 완료")
         
         # 종합 결과
         similar_case_patterns = {
             'cohort_size': len(similar_cases),
-            'survival_stats': survival_stats,
-            'demographic_patterns': demographic_patterns,
-            'admission_patterns': admission_patterns,
+            'statistic_based_analysis': statistics_based_analysis,
             'clinical_patterns': clinical_patterns,
             'outcome_comparison': outcome_comparison
         }
         
-        print("✅ 코호트 분석 완료\n")
+        # JSON 파일로 저장 (최신 파일만 유지)
+        self._save_to_json(similar_case_patterns)
+        
+        print("코호트 분석 완료\n")
+        
         return similar_case_patterns
     
-    def _analyze_survival(self, cases: List[Dict], stats: Dict) -> Dict:
-        """생존 통계 분석"""
+    def _save_to_json(self, data: Dict) -> str:
+        """
+        similar_case_patterns를 JSON 파일로 저장
+        outputs/similar_case_patterns/ 폴더에 최신 파일만 유지
+        """
+        # 출력 디렉토리 생성
+        output_dir = Path("outputs/similar_case_patterns")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 기존 파일 모두 삭제 (최신 파일만 유지)
+        for old_file in output_dir.glob("*.json"):
+            old_file.unlink()
+        
+        # 파일명 생성 (타임스탬프)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"similar_case_patterns_{timestamp}.json"
+        filepath = output_dir / filename
+        
+        # JSON 저장
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        print(f"결과 저장: {filepath}")
+        return str(filepath)
+    
+    def _analyze_with_llm(self, cases: List[Dict]) -> Dict:
+        """
+        메타데이터 기반 임상 텍스트 패턴 분석
+        
+        각 케이스의 메타데이터(생존여부, 성별, 나이, admission type, 
+        admission/discharge location, arrival transport, disposition)를 
+        기준으로 text를 분석하여 패턴 추출
+        
+        Args:
+            cases: 유사 케이스 리스트 (메타데이터 + text 포함)
+        
+        Returns:
+            메타데이터 기반 패턴 분석 결과
+        """
+        # 프롬프트 구성
+        prompt = self._build_metadata_based_prompt(cases)
+        
+        # LLM 호출
+        llm_response = self._call_llm_api(prompt)
+        
+        
         return {
-            'total_cases': stats['total'],
-            'survived': stats['alive'],
-            'died': stats['dead'],
-            'survival_rate': round(stats['survival_rate'] * 100, 1),  # 백분율
-            'case_ids': {
-                'survived': [c['id'] for c in cases if c['status'] == 'alive'],
-                'died': [c['id'] for c in cases if c['status'] == 'dead']
-            }
+            'pattern_analysis': llm_response,
         }
     
-    def _analyze_demographics(self, cases: List[Dict]) -> Dict:
-        """인구통계학적 패턴 분석"""
-        ages = [c['age'] for c in cases]
-        sexes = [c['sex'] for c in cases]
+    def _build_metadata_based_prompt(self, cases: List[Dict]) -> str:
+        """메타데이터 기반 패턴 분석 프롬프트 생성"""
         
-        sex_count = Counter(sexes)
+        prompt = """You are an expert medical analyst. Analyze the following patient cases based on their metadata characteristics and clinical text.
+
+=== PATIENT CASES ===
+"""
+        # 각 케이스별 메타데이터 + text 추가
+        for i, case in enumerate(cases, 1):
+            prompt += f"""
+--- Case {i} ---
+[METADATA]
+• Patient ID: {case.get('id', 'N/A')}
+• Status: {case.get('status', 'N/A').upper()}
+• Sex: {case.get('sex', 'N/A')}
+• Age: {case.get('age', 'N/A')}
+• Admission Type: {case.get('admission_type', 'N/A')}
+• Admission Location: {case.get('admission_location', 'N/A')}
+• Discharge Location: {case.get('discharge_location', 'N/A')}
+• Arrival Transport: {case.get('arrival_transport', 'N/A')}
+• Disposition: {case.get('disposition', 'N/A')}
+• Similarity Score: {case.get('similarity', 0):.3f}
+
+[CLINICAL TEXT]
+{case.get('text', 'No text available')}
+"""
         
-        return {
-            'age_range': {
-                'min': min(ages),
-                'max': max(ages),
-                'mean': round(sum(ages) / len(ages), 1)
-            },
-            'sex_distribution': dict(sex_count),
-            'details': [
-                {
-                    'id': c['id'],
-                    'age': c['age'],
-                    'sex': c['sex'],
-                    'status': c['status']
-                }
-                for c in cases
-            ]
-        }
-    
-    def _analyze_admission(self, cases: List[Dict]) -> Dict:
-        """입원 패턴 분석"""
-        admission_types = [c['admission_type'] for c in cases]
-        admission_locations = [c['admission_location'] for c in cases]
-        discharge_locations = [c['discharge_location'] for c in cases]
+        prompt += """
+
+=== ANALYSIS INSTRUCTIONS ===
+Based on the metadata and clinical text above, identify patterns in the following categories:
+
+1. **SURVIVAL PATTERNS**
+   - What metadata factors correlate with survival vs death?
+   - Age, sex, admission type patterns in each outcome group
+
+2. **ADMISSION PATTERNS**
+   - Common admission types and locations
+   - How admission characteristics relate to clinical presentations in text
+
+3. **DISCHARGE PATTERNS**
+   - Discharge location patterns by outcome
+   - Disposition trends and their clinical context based on metadata and text
+
+4. **TRANSPORT & ARRIVAL PATTERNS**
+   - Arrival transport methods and their correlation with severity (from text)
+
+5. **CLINICAL TEXT PATTERNS BY METADATA**
+   - Common diagnoses/conditions mentioned in survived vs deceased
+   - Treatment patterns by admission type
+   - Clinical severity indicators by age group
+
+6. **KEY INSIGHTS**
+   - Most significant patterns found
+   - Risk factors identified
+   - Recommendations for similar future cases
+
+Provide concise, actionable insights for each category.
+"""
         
-        return {
-            'admission_type_distribution': dict(Counter(admission_types)),
-            'admission_location_distribution': dict(Counter(admission_locations)),
-            'discharge_location_distribution': dict(Counter(discharge_locations)),
-            'most_common': {
-                'admission_type': Counter(admission_types).most_common(1)[0] if admission_types else None,
-                'admission_location': Counter(admission_locations).most_common(1)[0] if admission_locations else None,
-                'discharge_location': Counter(discharge_locations).most_common(1)[0] if discharge_locations else None
-            }
-        }
+        return prompt
     
     def _analyze_clinical_text_with_llm(self, cases: List[Dict]) -> Dict:
         """Hugging Face API를 사용한 임상 텍스트 패턴 분석"""
@@ -192,19 +254,10 @@ class CohortComparator:
         prompt = self._build_clinical_analysis_prompt(case_summaries)
         
         # Hugging Face API 호출
-        llm_analysis = self._call_hf_api(prompt)
+        llm_analysis = self._call_llm_api(prompt)
         
         return {
-            'llm_analysis': llm_analysis,
-            'case_summaries': [
-                {
-                    'id': c['id'],
-                    'status': c['status'],
-                    'similarity': c['similarity'],
-                    'text_preview': c['text'][:200] + "..." if len(c['text']) > 200 else c['text']
-                }
-                for c in case_summaries
-            ]
+            'llm_analysis': llm_analysis
         }
     
     def _build_clinical_analysis_prompt(self, case_summaries: List[Dict]) -> str:
@@ -253,7 +306,7 @@ Keep the analysis concise and focus on actionable clinical insights.
             survived_cases, died_cases, survived_stats, died_stats
         )
         
-        llm_comparison = self._call_hf_api(comparison_prompt)
+        llm_comparison = self._call_llm_api(comparison_prompt)
         
         return {
             'survived_group': survived_stats,
@@ -273,26 +326,24 @@ Keep the analysis concise and focus on actionable clinical insights.
         prompt = "You are a medical data analyst specializing in outcome comparison.\n\n"
         prompt += "Compare the following patient groups and identify key differences:\n\n"
         
-        # 생존 그룹
+        # 생존 그룹 - 전체 텍스트 사용
         if survived:
             prompt += f"SURVIVED GROUP ({len(survived)} patients):\n"
             prompt += f"- Average age: {survived_stats['avg_age']}\n"
             prompt += f"- Sex distribution: {survived_stats['sex_distribution']}\n"
-            prompt += "Clinical summaries:\n"
+            prompt += "Clinical records:\n"
             for i, case in enumerate(survived, 1):
-                text_short = case['text'][:150] + "..." if len(case['text']) > 150 else case['text']
-                prompt += f"  {i}. {text_short}\n"
+                prompt += f"\n  [Case {i}]\n{case['text']}\n"
             prompt += "\n"
         
-        # 사망 그룹
+        # 사망 그룹 - 전체 텍스트 사용
         if died:
             prompt += f"DECEASED GROUP ({len(died)} patients):\n"
             prompt += f"- Average age: {died_stats['avg_age']}\n"
             prompt += f"- Sex distribution: {died_stats['sex_distribution']}\n"
-            prompt += "Clinical summaries:\n"
+            prompt += "Clinical records:\n"
             for i, case in enumerate(died, 1):
-                text_short = case['text'][:150] + "..." if len(case['text']) > 150 else case['text']
-                prompt += f"  {i}. {text_short}\n"
+                prompt += f"\n  [Case {i}]\n{case['text']}\n"
             prompt += "\n"
         
         prompt += """
@@ -331,7 +382,7 @@ Keep the analysis concise and clinically relevant.
             f"and {len(died)} died (avg age {died_avg_age:.1f}). "
         )
         
-        if abs(survived_avg_age - died_avg_age) > 5:
+        if abs(survived_avg_age - died_avg_age) > 10: #나이차이 10살 이상 차이나면 통계적 유의미 차이 있음 명시
             if died_avg_age > survived_avg_age:
                 summary += "Deceased patients were notably older. "
             else:
