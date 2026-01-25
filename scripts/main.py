@@ -31,11 +31,11 @@ comparator = CohortComparator(model="mistralai/Mistral-7B-Instruct-v0.3")
 """
 import sys
 import os
+from src.retrieval.rag_retriever import *
+from src.critique_engine.cohort_comparator import *
+from src.critique_engine.critique_reasoner import *
+from src.critique_engine.verifier import *
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def main():
-    """메인 실행"""
-
-if __name__ == '__main__':
-    main()
