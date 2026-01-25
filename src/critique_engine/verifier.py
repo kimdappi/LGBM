@@ -5,63 +5,62 @@ Verifier
 - OpenAI GPT-4o 사용
 """
 
+import requests
 from typing import Dict, List, Any
 import json
 import os
-from dotenv import load_dotenv
 from openai import OpenAI
-
+from dotenv import load_dotenv
 load_dotenv()
 
-
 class Verifier:
-    """
-    Critique 결과를 검증하고
-    유사 케이스를 근거로 해결책(Solution)을 생성하는 모듈
-    """
 
-    def __init__(self, model: str = "gpt-4o"):
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None):
+
         self.model = model
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    def _call_llm(self, prompt: str) -> str:
-        """OpenAI GPT-4o 호출"""
-
+        self.api_url = "https://api.openai.com/v1/response"
+        self.api_key = api_key or os.environ.get("API_KEY", "")
+    
+    def _call_llm_api(self, prompt: str) -> str:
+        """OpenAI API 호출"""
+        
+        if not self.api_key:
+            print("OPENAI_API_KEY가 설정되지 않았습니다.")
+            return None
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4000
+        }
+        
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a clinical verifier."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=1200
-            )
-            return response.choices[0].message.content
-
+            response = requests.post(self.api_url, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+                
         except Exception as e:
-            return f"[ERROR] {e}"
+            print(f"OpenAI API 호출 실패: {e}")
+            return None
+
 
     def verify(
         self,
         critique: Dict,
         similar_cases_topk: List[Dict]
     ) -> Dict:
-        """
-        Args:
-            critique: critique_reasoner 결과
-            similar_cases_topk: 유사 케이스 topk=3 (RAG 결과 원본)
-
-        Returns:
-            {
-              patient_id,
-              solutions,
-              raw
-            }
-        """
 
         prompt = self._build_prompt(critique, similar_cases_topk)
-        llm_response = self._call_llm(prompt)
+        llm_response = self._call_llm_api(prompt)
 
         solutions = self._safe_parse_json(llm_response).get("solutions", [])
 
