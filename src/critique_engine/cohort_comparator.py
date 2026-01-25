@@ -135,7 +135,7 @@ class CohortComparator:
         for old_file in output_dir.glob("*.json"):
             old_file.unlink()
         
-        # 파일명 생성 (타임스탬프)
+        # 파일명 생성 (타임스탬프 같이 구분용)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"similar_case_patterns_{timestamp}.json"
         filepath = output_dir / filename
@@ -358,35 +358,3 @@ Keep the analysis concise and clinically relevant.
 """
         
         return prompt
-    
-    def _generate_comparison_summary(
-        self, 
-        survived: List[Dict], 
-        died: List[Dict]
-    ) -> str:
-        """생존/사망 그룹 비교 요약 생성"""
-        if not survived and not died:
-            return "No cases available for comparison."
-        
-        if not died:
-            return f"All {len(survived)} similar cases survived."
-        
-        if not survived:
-            return f"All {len(died)} similar cases died."
-        
-        survived_avg_age = sum(c['age'] for c in survived) / len(survived)
-        died_avg_age = sum(c['age'] for c in died) / len(died)
-        
-        summary = (
-            f"Among similar cases: {len(survived)} survived (avg age {survived_avg_age:.1f}) "
-            f"and {len(died)} died (avg age {died_avg_age:.1f}). "
-        )
-        
-        if abs(survived_avg_age - died_avg_age) > 10: #나이차이 10살 이상 차이나면 통계적 유의미 차이 있음 명시
-            if died_avg_age > survived_avg_age:
-                summary += "Deceased patients were notably older. "
-            else:
-                summary += "Deceased patients were notably younger. "
-        
-        return summary
-    
