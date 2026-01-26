@@ -37,8 +37,8 @@ class CohortComparator:
             api_key: OpenAI API 키 (없으면 환경변수 OPENAI_API_KEY 사용)
         """
         self.model = model
-        self.api_url = "https://api.openai.com/v1/response"
-        self.api_key = api_key or os.environ.get("API_KEY", "")
+        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     
     def _call_llm_api(self, prompt: str) -> str:
         """OpenAI API 호출"""
