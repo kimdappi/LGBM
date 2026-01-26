@@ -12,13 +12,15 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from transformers import AutoTokenizer, AutoModel
 
+BASE_DIR = Path(__file__).resolve().parents[2]  # project root
+DEFAULT_DB_PATH = BASE_DIR / "data" / "vector_db"
 
 class VectorDBManager:
     """FAISS 벡터 DB 관리 클래스 - 기존 DB 로드"""
     
-    def __init__(self, embedding_model: str = 'dmis-lab/biobert-v1.1', db_path: str = 'data/vector_db'):
+    def __init__(self, embedding_model: str = 'dmis-lab/biobert-v1.1', db_path: str = '../data/vector_db'):
         self.embedding_model = embedding_model
-        self.db_path = Path(db_path)
+        self.db_path = Path(DEFAULT_DB_PATH)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # 쿼리 임베딩용
         self.tokenizer = None
@@ -91,7 +93,7 @@ class VectorDBManager:
             # 메타데이터에서 전체 record 가져오기
             # metadata.pkl에는 이미 text 포함된 전체 데이터가 저장되어 있음
             record = self.metadata[idx].copy()
-            record['similarity'] = float(similarities)
+            record['similarity'] = float(dist)
             
             results.append(record)
         

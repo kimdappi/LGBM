@@ -4,9 +4,9 @@ Critique Reasoner - 비판적 분석 모듈
 ## 추후 모델명을 조절하는 modelinfo.py 생성하는 것이 나을 것으로 보임.
 """
 
-from typing import Dict, List
-import requests
+from typing import Dict, List, Any
 import json
+import requests
 
 
 class CritiqueReasoner:
@@ -18,18 +18,12 @@ class CritiqueReasoner:
     """
     
     def __init__(self, model: str = "mistralai/Mistral-7B-Instruct-v0.3"):
-        """
-        Critique Reasoner 초기화
-        
-        Args:
-            model: Hugging Face 모델 이름
-                - "mistralai/Mistral-7B-Instruct-v0.3"
-        """
+
         self.model = model
         self.api_url = f"https://api-inference.huggingface.co/models/{model}"
     
-    def _call_hf_api(self, prompt: str) -> str:
-        """Hugging Face Inference API 호출"""
+    def _call_hf_api(self, prompt: str, stream: bool = False) -> str:
+        """Hugging Face Inference API 호출 (무료, API 키 불필요)"""
         
         payload = {
             "inputs": prompt,
@@ -39,27 +33,33 @@ class CritiqueReasoner:
                 "return_full_text": False
             }
         }
+        if stream:
+            payload["stream"] = True
         
         try:
-            response = requests.post(self.api_url, json=payload)
+            response = requests.post(self.api_url, json=payload, timeout=30, stream=stream)
             response.raise_for_status()
+            if stream:
+                return self._consume_stream_response(response)
+
             result = response.json()
-            
+
             # 응답 형식에 따라 처리
             if isinstance(result, list) and len(result) > 0:
                 return result[0].get('generated_text', 'No response')
-            elif isinstance(result, dict):
+            if isinstance(result, dict):
                 return result.get('generated_text', 'No response')
-            else:
-                return str(result)
-        except:#빠져서 파이썬 버전에 따라 충돌날까봐 임의로 추가해둠
-            pass 
+            return str(result)
+        except Exception as e:
+            print(f"Hugging Face API 호출 실패: {e}")
+            return "No response"
                 
     
     def critique(
         self,
         patient_data: Dict,
-        similar_case_patterns: Dict
+        similar_case_patterns: Dict,
+        stream: bool = False
     ) -> Dict:
         """
         환자 케이스 비판적 분석
@@ -98,27 +98,22 @@ class CritiqueReasoner:
         """
         print("\n[CritiqueReasoner] 비판적 분석 시작...")
         
-        # 프롬프트 생성
-        prompt = self._build_critique_prompt(patient_data, similar_case_patterns)
-        
-        # LLM 호출
-        llm_response = self._call_hf_api(prompt)
-        
-        # 결과 파싱 (구조화 시도)
-        critique = self._parse_critique(llm_response, patient_data, similar_case_patterns)
+        # Stage 1: 환자 근거 추출
+        stage1_result = self._extract_patient_evidence(patient_data, stream=stream)
+
+        # Stage 2: 코호트 기반 비판 생성
+        critique = self._generate_critique(stage1_result, similar_case_patterns, stream=stream)
         
         print(" 비판적 분석 완료\n")
         
         return critique
     
-    def _build_critique_prompt(
+    def _build_stage1_prompt(
         self,
-        patient_data: Dict,
-        patterns: Dict
+        patient_data: Dict
     ) -> str:
-        """비판적 분석용 프롬프트 생성"""
-        
-        # 환자 정보 요약
+        """Stage 1 프롬프트 생성: 근거/결정지점 추출"""
+
         patient_summary = f"""
 Patient Case:
 - ID: {patient_data.get('id')}
@@ -128,16 +123,50 @@ Patient Case:
 - Status: {patient_data.get('status', 'unknown').upper()}
 - Clinical Summary: {patient_data.get('text', 'No clinical summary available')}
 """
-        
-        # 유사 케이스 패턴 요약
+
+        return f"""You are an evidence extractor. Do NOT critique.
+
+{patient_summary}
+
+Task: Extract the following from the clinical text:
+
+1. **EVIDENCE_SPANS**: Key clinical findings mentioned in the text
+   - Symptoms, vital signs, lab results, imaging findings, diagnoses
+   - Format: {{span_id: {{section: "category", quote: "exact text"}}}}
+
+2. **DECISION_POINTS**: Treatment/diagnostic decisions made by clinicians
+   - Examples: medication orders, procedures, consultations, discharge plans
+   - For each decision, identify:
+     - What was decided
+     - When (time_hint)
+     - Which evidence_spans justify this decision
+     - What information was missing but needed
+
+3. **UNCERTAINTIES**: Information gaps or ambiguous findings in the record
+
+Return JSON only:
+{{
+  "evidence_spans": {{}},
+  "decision_points": [],
+  "uncertainties": []
+}}
+"""
+
+    def _build_stage2_prompt(
+        self,
+        stage1_result: Dict,
+        patterns: Dict
+    ) -> str:
+        """Stage 2 프롬프트 생성: 코호트 기반 비판 생성"""
+
         survival_stats = patterns.get('survival_stats', {})
         clinical_patterns = patterns.get('clinical_patterns', {})
         outcome_comparison = patterns.get('outcome_comparison', {})
-        
+
         cohort_summary = f"""
 Similar Cases Analysis:
 - Cohort Size: {patterns.get('cohort_size', 0)} cases
-- Survival Rate: {survival_stats.get('survival_rate', 0)}% 
+- Survival Rate: {survival_stats.get('survival_rate', 0)}%
   ({survival_stats.get('survived', 0)} survived, {survival_stats.get('died', 0)} died)
 
 Clinical Patterns from Similar Cases:
@@ -146,68 +175,99 @@ Clinical Patterns from Similar Cases:
 Outcome Comparison:
 {outcome_comparison.get('comparison_analysis', 'No outcome comparison available')}
 """
-        
-        # 전체 프롬프트
-        prompt = f"""You are a critical medical reviewer analyzing patient care quality and outcomes.
 
-{patient_summary}
+        return f"""You are a critical medical reviewer. Use ONLY provided evidence.
+
+Stage 1 Evidence (JSON):
+{json.dumps(stage1_result, ensure_ascii=False)}
 
 {cohort_summary}
 
-Task: Critically analyze this patient's case by comparing it with similar cases. Provide:
+Task: Generate a critical review comparing this patient to similar cases. Return JSON with:
 
-1. CRITIQUE POINTS: Identify potential issues, gaps in care, or areas of concern in the patient's management
-2. RISK FACTORS: Based on similar cases, what risk factors does this patient have?
-3. COMPARISON WITH COHORT: How does this patient's presentation and management compare to similar cases?
-4. RECOMMENDATIONS: What should be monitored or improved?
+1. **analysis** (string): 
+   - Overall assessment of the patient's clinical course
+   - Compare patient's treatment decisions with patterns from similar cases
+   - Highlight key differences between this patient and the cohort
 
-Structure your response with clear sections. Be specific and clinically relevant. Focus on actionable insights.
+2. **critique_points** (array of objects):
+   - Each critique must identify a potential issue, gap, or concern in patient care
+   - Structure: {{"point": "description", "span_id": "E1 or record_uncertainty", "severity": "high/medium/low", "cohort_comparison": "how similar cases differed"}}
+   - Examples of critiques: delayed treatment, missing diagnostic tests, deviation from common successful patterns, incomplete documentation
+
+3. **risk_factors** (array of strings):
+   - Patient-specific factors that increase risk (from evidence_spans)
+   - Factors where this patient differs negatively from survived cases in cohort
+
+4. **recommendations** (array of strings):
+   - Actionable suggestions based on successful patterns from similar cases
+   - Address each critique_point with a specific recommendation
+   - Prioritize recommendations by potential impact on outcome
+
+Rules:
+- Every critique_point MUST cite at least one span_id from Stage 1 OR use "record_uncertainty" if based on missing information.
+- Support critiques with cohort pattern evidence when available.
+- Do NOT assume or claim death/survival as ground truth - focus on process, not outcome.
+- Return valid JSON only, no additional text.
 """
-        
-        return prompt
+
+    def _extract_patient_evidence(self, patient_data: Dict, stream: bool = False) -> Dict:
+        """Stage 1: 환자 근거 추출"""
+        prompt = self._build_stage1_prompt(patient_data)
+        llm_response = self._call_hf_api(prompt, stream=stream)
+        result = self._safe_json_parse(llm_response, fallback={
+            "evidence_spans": {},
+            "decision_points": [],
+            "uncertainties": []
+        })
+        result["patient_id"] = patient_data.get("id")
+        return result
+
+    def _generate_critique(self, stage1_result: Dict, patterns: Dict, stream: bool = False) -> Dict:
+        """Stage 2: 코호트 기반 비판 생성"""
+        prompt = self._build_stage2_prompt(stage1_result, patterns)
+        llm_response = self._call_hf_api(prompt, stream=stream)
+        critique = self._safe_json_parse(llm_response, fallback={
+            "analysis": llm_response,
+            "critique_points": [],
+            "risk_factors": [],
+            "recommendations": []
+        })
+
+        critique["patient_id"] = stage1_result.get("patient_id")
+        critique["cohort_size"] = patterns.get("cohort_size", 0)
+        critique["survival_rate"] = patterns.get("survival_stats", {}).get("survival_rate", 0)
+        return critique
     
-    def _parse_critique(
-        self,
-        llm_response: str,
-        patient_data: Dict,
-        patterns: Dict
-    ) -> Dict:
-        """LLM 응답을 구조화된 critique로 파싱"""
-        
-        # 기본 구조
-        critique = {
-            'analysis': llm_response,
-            'critique_points': [],
-            'risk_factors': [],
-            'recommendations': []
-        }
-        
-        # 간단한 섹션 파싱 시도
-        lines = llm_response.split('\n')
-        current_section = None
-        
-        for line in lines:
-            line = line.strip()
+    def _safe_json_parse(self, text: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
+        """LLM 응답을 JSON으로 파싱, 실패 시 fallback 반환"""
+        if not text or text == "No response":
+            return fallback
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return fallback
+
+    def _consume_stream_response(self, response: requests.Response) -> str:
+        """스트리밍 응답을 실시간 출력하고 전체 텍스트 반환"""
+        output_chunks: List[str] = []
+        for line in response.iter_lines(decode_unicode=True):
             if not line:
                 continue
-            
-            # 섹션 감지
-            line_lower = line.lower()
-            if 'critique' in line_lower and 'point' in line_lower:
-                current_section = 'critique_points'
-            elif 'risk' in line_lower and 'factor' in line_lower:
-                current_section = 'risk_factors'
-            elif 'recommendation' in line_lower:
-                current_section = 'recommendations'
-            elif line.startswith('-') or line.startswith('•') or line.startswith('*'):
-                # 리스트 아이템
-                item = line.lstrip('-•* ').strip()
-                if current_section and item:
-                    critique[current_section].append(item)
-        
-        # 메타 정보 추가
-        critique['patient_id'] = patient_data.get('id')
-        critique['cohort_size'] = patterns.get('cohort_size', 0)
-        critique['survival_rate'] = patterns.get('survival_stats', {}).get('survival_rate', 0)
-        
-        return critique
+            if line.startswith("data:"):
+                line = line[len("data:"):].strip()
+            try:
+                payload = json.loads(line)
+                token = (
+                    payload.get("token", {}).get("text")
+                    or payload.get("generated_text")
+                    or payload.get("text")
+                )
+                if token:
+                    print(token, end="", flush=True)
+                    output_chunks.append(token)
+            except json.JSONDecodeError:
+                print(line, end="", flush=True)
+                output_chunks.append(line)
+        print()
+        return "".join(output_chunks)

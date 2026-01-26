@@ -75,3 +75,5 @@ Thumbs.db
 .env
 .env.local
 *.key
+secrets.yaml
+config/secrets.yaml

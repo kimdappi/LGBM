@@ -135,7 +135,7 @@ class CohortComparator:
         for old_file in output_dir.glob("*.json"):
             old_file.unlink()
         
-        # 파일명 생성 (타임스탬프 같이 구분용)
+        # 파일명 생성 (타임스탬프)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"similar_case_patterns_{timestamp}.json"
         filepath = output_dir / filename
@@ -358,3 +358,6 @@ Keep the analysis concise and clinically relevant.
 """
         
         return prompt
+        
+        return summary
+    
