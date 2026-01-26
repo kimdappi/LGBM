@@ -105,3 +105,4 @@ CARE-CRITIC/
 | **Critique Reasoner** | 환자와 유사 케이스 비교하여 비판적 검토 포인트 생성 |
 | **Verifier** | 비판 포인트에 대한 해결책 제시 (유사 케이스 근거 기반) |
 | **Report Generator** | 최종 분석 결과를 JSON 형식으로 저장 |
+

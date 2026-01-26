@@ -1,10 +1,10 @@
-f"""
+"""
 코호트 비교 모듈 - 유사 환자끼리 치료 패턴 비교
 
 [흐름]
 1. rag_retriever에서 검색된 유사 케이스를 받음 (text 및 메타데이터 모두)
 2. 코호트 간 치료 패턴 비교하고 생존/사망 통계 분석
-3. Hugging Face LLM으로 임상 패턴 심층 분석 (무료)
+3. OpenAI LLM으로 임상 패턴 심층 분석
 4. 비교 결과 반환 (similar_case_patterns 변수로 레포트 생성에 사용 예정)
 """
 
@@ -16,7 +16,10 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
-load_dotenv()
+
+# .env 파일 경로를 프로젝트 루트 기준으로 설정
+env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 class CohortComparator:
@@ -37,8 +40,8 @@ class CohortComparator:
             api_key: OpenAI API 키 (없으면 환경변수 OPENAI_API_KEY 사용)
         """
         self.model = model
-        self.api_url = "https://api.openai.com/v1/response"
-        self.api_key = api_key or os.environ.get("API_KEY", "")
+        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     
     def _call_llm_api(self, prompt: str) -> str:
         """OpenAI API 호출"""

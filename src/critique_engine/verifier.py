@@ -9,17 +9,20 @@ import requests
 from typing import Dict, List, Any
 import json
 import os
-from openai import OpenAI
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+
+# .env 파일 경로를 프로젝트 루트 기준으로 설정
+env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=env_path)
 
 class Verifier:
 
     def __init__(self, model: str = "gpt-4o-mini", api_key: str = None):
 
         self.model = model
-        self.api_url = "https://api.openai.com/v1/response"
-        self.api_key = api_key or os.environ.get("API_KEY", "")
+        self.api_url = "https://api.openai.com/v1/chat/completions"  # 올바른 엔드포인트
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     
     def _call_llm_api(self, prompt: str) -> str:
         """OpenAI API 호출"""
