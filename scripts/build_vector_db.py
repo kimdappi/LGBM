@@ -26,9 +26,13 @@ from typing import List, Dict
 import torch
 from tqdm import tqdm
 import faiss
+import os
 FAISS_AVAILABLE = True
 from transformers import AutoTokenizer, AutoModel
 TRANSFORMERS_AVAILABLE = True
+
+# 프로젝트 루트 경로 설정 (scripts/ 폴더에서 실행해도 정상 작동)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class MedicalDataLoader:
@@ -220,10 +224,10 @@ def run_pipeline(
 def main():
     """메인 실행"""
     run_pipeline(
-        dead_file='data/flag_1_textclean.csv',
-        alive_file='data/flag_0_textclean.csv',
-        json_output='data/processed_data.json',
-        vector_db_output='data/vector_db',
+        dead_file=str(PROJECT_ROOT / 'data' / 'flag_1_textclean.csv'),
+        alive_file=str(PROJECT_ROOT / 'data' / 'flag_0_textclean.csv'),
+        json_output=str(PROJECT_ROOT / 'data' / 'processed_data.json'),
+        vector_db_output=str(PROJECT_ROOT / 'data' / 'vector_db'),
         batch_size=8,
         max_length=512
     )

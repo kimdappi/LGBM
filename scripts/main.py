@@ -78,7 +78,8 @@ def main():
     similar_cases: List[Dict[str, Any]] = cohort_data.get("similar_cases", [])
 
     # 2) Comparator: 입력은 cohort_data 하나
-    comparator = CohortComparator(model="mistralai/Mistral-7B-Instruct-v0.3")
+    # OpenAI API 사용 (gpt-4o-mini 기본값)
+    comparator = CohortComparator(model="gpt-4o-mini")
     similar_case_patterns: Dict[str, Any] = comparator.analyze_cohort(cohort_data)
 
     # Reasoner / ReportGenerator가 기대하는 survival_stats를 main에서 보강
