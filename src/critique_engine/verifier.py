@@ -42,6 +42,7 @@ import requests
 from typing import Dict, List, Any
 import json
 import os
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -57,17 +58,11 @@ class Verifier:
         self.api_url = "https://api.openai.com/v1/chat/completions"  # 올바른 엔드포인트
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     
-    def _call_llm_api(self, prompt: str) -> str:
+    def _call_llm_api(self, prompt: str, max_retries: int = 5) -> str:
         """OpenAI API 호출"""
         
         if not self.api_key:
-            print("OPENAI_API_KEY가 설정되지 않았습니다.")
-            return None
-        
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+            raise Exception("OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
         
         payload = {
             "model": self.model,
@@ -78,15 +73,91 @@ class Verifier:
             "max_tokens": 4000
         }
         
-        try:
-            response = requests.post(self.api_url, headers=headers, json=payload)
-            response.raise_for_status()
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
+        for attempt in range(1, max_retries + 1):
+            try:
+                actual_headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                response = requests.post(
+                    self.api_url, 
+                    headers=actual_headers, 
+                    json=payload,
+                    timeout=120
+                )
+
+                if response.status_code == 401:
+                    raise Exception("API 키가 유효하지 않습니다. .env 파일의 OPENAI_API_KEY를 확인하세요.")
                 
-        except Exception as e:
-            print(f"OpenAI API 호출 실패: {e}")
-            return None
+                elif response.status_code == 429:
+                    if attempt < max_retries:
+                        wait_time = min(attempt * 20, 120)  # 최대 2분
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception(f"Rate limit: {max_retries}회 시도 후에도 실패")
+                
+                elif response.status_code >= 500:
+                    if attempt < max_retries:
+                        wait_time = attempt * 10
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception(f"서버 에러 ({response.status_code}): {max_retries}회 시도 후에도 실패")
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                if "choices" not in result or len(result["choices"]) == 0:
+                    raise Exception("API 응답에 choices가 없습니다.")
+                
+                content = result["choices"][0]["message"]["content"]
+                if not content:
+                    raise Exception("API 응답의 content가 비어있습니다.")
+                return content
+                
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries:
+                    wait_time = attempt * 5
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"타임아웃: {max_retries}회 시도 후에도 실패. 마지막 에러: {e}")
+            
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries:
+                    wait_time = attempt * 5
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"연결 실패: {max_retries}회 시도 후에도 실패. 네트워크를 확인하세요. 마지막 에러: {e}")
+            
+            except requests.exceptions.HTTPError as e:
+                if attempt < max_retries:
+                    wait_time = attempt * 10
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"HTTP 에러: {max_retries}회 시도 후에도 실패. 마지막 에러: {e}")
+            
+            except json.JSONDecodeError as e:
+                if attempt < max_retries:
+                    wait_time = 5
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"JSON 파싱 실패: {max_retries}회 시도 후에도 실패. 응답 형식이 예상과 다릅니다. 마지막 에러: {e}")
+            
+            except Exception as e:
+                if attempt < max_retries:
+                    wait_time = attempt * 5
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"API 호출 실패: {max_retries}회 시도 후에도 실패. 마지막 에러: {type(e).__name__}: {e}")
+        
+        # 이 코드는 도달하지 않아야 하지만 안전장치
+        raise Exception(f"API 호출 최종 실패: {max_retries}회 시도 후에도 성공하지 못함")
 
 
     def verify(
@@ -96,7 +167,13 @@ class Verifier:
     ) -> Dict:
 
         prompt = self._build_prompt(critique, similar_cases_topk)
-        llm_response = self._call_llm_api(prompt)
+        
+        try:
+            llm_response = self._call_llm_api(prompt)
+            if not llm_response:
+                raise Exception("Verifier API 호출 실패: 응답이 비어있음")
+        except Exception as e:
+            raise
 
         solutions = self._safe_parse_json(llm_response).get("solutions", [])
 
@@ -180,12 +257,29 @@ Output format:
         if not text:
             return {}
 
+        # JSON 코드 블록에서 추출 시도
+        if "```json" in text:
+            start = text.find("```json") + 7
+            end = text.find("```", start)
+            if end != -1:
+                text = text[start:end].strip()
+        elif "```" in text:
+            start = text.find("```") + 3
+            end = text.find("```", start)
+            if end != -1:
+                text = text[start:end].strip()
+
         try:
+            parsed = json.loads(text)
+            return parsed
+        except json.JSONDecodeError:
             start = text.find("{")
             end = text.rfind("}")
             if start != -1 and end != -1:
-                return json.loads(text[start:end + 1])
-        except Exception:
-            pass
-
-        return {}
+                try:
+                    extracted = text[start:end + 1]
+                    parsed = json.loads(extracted)
+                    return parsed
+                except json.JSONDecodeError:
+                    pass
+            return {}

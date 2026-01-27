@@ -6,7 +6,15 @@ Critique Reasoner - 비판적 분석 모듈
 
 from typing import Dict, List, Any
 import json
+import os
 import requests
+import time
+from pathlib import Path
+from dotenv import load_dotenv
+
+# .env 파일 경로를 프로젝트 루트 기준으로 설정
+env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 class CritiqueReasoner:
@@ -17,42 +25,95 @@ class CritiqueReasoner:
     잠재적 문제점, 개선 사항, 주의사항 등을 분석
     """
     
-    def __init__(self, model: str = "mistralai/Mistral-7B-Instruct-v0.3"):
-
+    def __init__(self, model: str = "gpt-4o-mini", api_key: str = None):
+        """CritiqueReasoner 초기화 (OpenAI 사용)"""
         self.model = model
-        self.api_url = f"https://api-inference.huggingface.co/models/{model}"
+        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
     
-    def _call_hf_api(self, prompt: str, stream: bool = False) -> str:
-        """Hugging Face Inference API 호출 (무료, API 키 불필요)"""
-        
+    def _call_llm_api(self, prompt: str, stream: bool = False, max_retries: int = 5) -> str:
+        """OpenAI API 호출"""
+        if not self.api_key:
+            raise Exception("OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+
         payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 1500,
-                "temperature": 0.3,
-                "return_full_text": False
-            }
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 4000
         }
-        if stream:
-            payload["stream"] = True
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=120
+                )
+
+                if response.status_code == 401:
+                    raise Exception("API 키가 유효하지 않습니다. .env 파일의 OPENAI_API_KEY를 확인하세요.")
+                elif response.status_code == 429:
+                    if attempt < max_retries:
+                        time.sleep(min(attempt * 20, 120))
+                        continue
+                    raise Exception(f"Rate limit: {max_retries}회 시도 후에도 실패")
+                elif response.status_code == 404:
+                    raise Exception(f"모델을 찾을 수 없음: {self.model}")
+                elif response.status_code >= 500:
+                    if attempt < max_retries:
+                        time.sleep(attempt * 10)
+                        continue
+                    raise Exception(f"서버 에러 ({response.status_code}): {max_retries}회 시도 후에도 실패")
+
+                response.raise_for_status()
+                result = response.json()
+
+                if "choices" not in result or len(result["choices"]) == 0:
+                    raise Exception("API 응답에 choices가 없습니다.")
+
+                content = result["choices"][0]["message"]["content"]
+                if not content:
+                    raise Exception("API 응답의 content가 비어있습니다.")
+
+                return content
+
+            except requests.exceptions.Timeout as e:
+                if attempt < max_retries:
+                    time.sleep(attempt * 5)
+                    continue
+                raise Exception(f"타임아웃: {max_retries}회 시도 후에도 실패. 마지막 에러: {e}")
+
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries:
+                    time.sleep(attempt * 5)
+                    continue
+                raise Exception(f"연결 실패: {max_retries}회 시도 후에도 실패. 네트워크를 확인하세요. 마지막 에러: {e}")
+
+            except requests.exceptions.HTTPError as e:
+                if attempt < max_retries:
+                    time.sleep(attempt * 10)
+                    continue
+                raise Exception(f"HTTP 에러: {max_retries}회 시도 후에도 실패. 마지막 에러: {e}")
+
+            except json.JSONDecodeError as e:
+                if attempt < max_retries:
+                    time.sleep(5)
+                    continue
+                raise Exception(f"JSON 파싱 실패: {max_retries}회 시도 후에도 실패. 응답 형식이 예상과 다릅니다. 마지막 에러: {e}")
+
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(attempt * 5)
+                    continue
+                raise Exception(f"API 호출 실패: {max_retries}회 시도 후에도 실패. 마지막 에러: {type(e).__name__}: {e}")
         
-        try:
-            response = requests.post(self.api_url, json=payload, timeout=30, stream=stream)
-            response.raise_for_status()
-            if stream:
-                return self._consume_stream_response(response)
-
-            result = response.json()
-
-            # 응답 형식에 따라 처리
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get('generated_text', 'No response')
-            if isinstance(result, dict):
-                return result.get('generated_text', 'No response')
-            return str(result)
-        except Exception as e:
-            print(f"Hugging Face API 호출 실패: {e}")
-            return "No response"
+        # 이 코드는 도달하지 않아야 하지만 안전장치
+        raise Exception(f"API 호출 최종 실패: {max_retries}회 시도 후에도 성공하지 못함")
                 
     
     def critique(
@@ -96,15 +157,11 @@ class CritiqueReasoner:
                 'recommendations': List[str]
             }
         """
-        print("\n[CritiqueReasoner] 비판적 분석 시작...")
-        
         # Stage 1: 환자 근거 추출
         stage1_result = self._extract_patient_evidence(patient_data, stream=stream)
 
         # Stage 2: 코호트 기반 비판 생성
         critique = self._generate_critique(stage1_result, similar_case_patterns, stream=stream)
-        
-        print(" 비판적 분석 완료\n")
         
         return critique
     
@@ -214,7 +271,13 @@ Rules:
     def _extract_patient_evidence(self, patient_data: Dict, stream: bool = False) -> Dict:
         """Stage 1: 환자 근거 추출"""
         prompt = self._build_stage1_prompt(patient_data)
-        llm_response = self._call_hf_api(prompt, stream=stream)
+        try:
+            llm_response = self._call_llm_api(prompt, stream=stream)
+            if not llm_response or llm_response == "No response":
+                raise Exception("Stage 1 API 호출 실패: 응답이 비어있음")
+        except Exception as e:
+            raise
+        
         result = self._safe_json_parse(llm_response, fallback={
             "evidence_spans": {},
             "decision_points": [],
@@ -226,7 +289,13 @@ Rules:
     def _generate_critique(self, stage1_result: Dict, patterns: Dict, stream: bool = False) -> Dict:
         """Stage 2: 코호트 기반 비판 생성"""
         prompt = self._build_stage2_prompt(stage1_result, patterns)
-        llm_response = self._call_hf_api(prompt, stream=stream)
+        try:
+            llm_response = self._call_llm_api(prompt, stream=stream)
+            if not llm_response or llm_response == "No response":
+                raise Exception("Stage 2 API 호출 실패: 응답이 비어있음")
+        except Exception as e:
+            raise
+        
         critique = self._safe_json_parse(llm_response, fallback={
             "analysis": llm_response,
             "critique_points": [],
@@ -243,9 +312,31 @@ Rules:
         """LLM 응답을 JSON으로 파싱, 실패 시 fallback 반환"""
         if not text or text == "No response":
             return fallback
+        
+        # JSON 코드 블록에서 추출 시도
+        if "```json" in text:
+            start = text.find("```json") + 7
+            end = text.find("```", start)
+            if end != -1:
+                text = text[start:end].strip()
+        elif "```" in text:
+            start = text.find("```") + 3
+            end = text.find("```", start)
+            if end != -1:
+                text = text[start:end].strip()
+        
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            # JSON 객체 찾기 시도
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    extracted = text[start:end + 1]
+                    return json.loads(extracted)
+                except json.JSONDecodeError:
+                    pass
             return fallback
 
     def _consume_stream_response(self, response: requests.Response) -> str:

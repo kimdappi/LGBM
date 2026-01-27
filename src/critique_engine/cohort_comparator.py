@@ -238,7 +238,7 @@ Provide concise, actionable insights for each category.
         return prompt
     
     def _analyze_clinical_text_with_llm(self, cases: List[Dict]) -> Dict:
-        """Hugging Face API를 사용한 임상 텍스트 패턴 분석"""
+        """OpenAI API를 사용한 임상 텍스트 패턴 분석"""
         
         # 각 케이스 요약 준비
         case_summaries = []
@@ -256,7 +256,7 @@ Provide concise, actionable insights for each category.
         # LLM 프롬프트 구성
         prompt = self._build_clinical_analysis_prompt(case_summaries)
         
-        # Hugging Face API 호출
+        # OpenAI API 호출
         llm_analysis = self._call_llm_api(prompt)
         
         return {
@@ -287,7 +287,7 @@ Keep the analysis concise and focus on actionable clinical insights.
         return prompt
     
     def _compare_outcomes_with_llm(self, cases: List[Dict]) -> Dict:
-        """Hugging Face API를 사용한 생존 vs 사망 그룹 비교"""
+        """OpenAI API를 사용한 생존 vs 사망 그룹 비교"""
         survived_cases = [c for c in cases if c['status'] == 'alive']
         died_cases = [c for c in cases if c['status'] == 'dead']
         
@@ -361,6 +361,4 @@ Keep the analysis concise and clinically relevant.
 """
         
         return prompt
-        
-        return summary
     
