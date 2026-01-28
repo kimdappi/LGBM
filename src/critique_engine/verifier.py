@@ -211,11 +211,23 @@ Recommendations:
 
         case_block = ""
         for i, c in enumerate(similar_cases[:3], 1):
+            # patient.json 스키마 기준: age, sex, status
+            age = c.get("age", c.get("anchor_age", "N/A"))
+            sex = c.get("sex", c.get("gender", "N/A"))
+            
+            # status 기준으로 outcome 결정
+            status = str(c.get("status", "")).lower()
+            if status:
+                outcome = "DIED" if status == "dead" else "SURVIVED"
+            else:
+                # fallback: hospital_expire_flag
+                outcome = "DIED" if c.get("hospital_expire_flag") == 1 else "SURVIVED"
+            
             case_block += f"""
 [Similar Case {i}]
-- Age/Sex: {c.get("anchor_age")}/{c.get("gender")}
+- Age/Sex: {age}/{sex}
 - Admission: {c.get("admission_type")} / {c.get("admission_location")}
-- Outcome: {"DIED" if c.get("hospital_expire_flag") == 1 else "SURVIVED"}
+- Outcome: {outcome}
 - Clinical Note:
 {c.get("text", "")[:800]}
 """
