@@ -8,6 +8,7 @@ import numpy as np
 import pickle
 import faiss
 import torch
+import os
 from pathlib import Path
 from typing import List, Dict, Optional
 from transformers import AutoTokenizer, AutoModel
@@ -15,13 +16,20 @@ from transformers import AutoTokenizer, AutoModel
 BASE_DIR = Path(__file__).resolve().parents[2]  # project root
 DEFAULT_DB_PATH = BASE_DIR / "data" / "vector_db"
 
+# Force CPU mode for macOS compatibility - disable CUDA and MPS
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+torch.cuda.is_available = lambda: False
+torch.backends.mps.is_available = lambda: False
+
 class VectorDBManager:
     """FAISS 벡터 DB 관리 클래스 - 기존 DB 로드"""
     
     def __init__(self, embedding_model: str = 'dmis-lab/biobert-v1.1', db_path: str = '../data/vector_db'):
         self.embedding_model = embedding_model
         self.db_path = Path(DEFAULT_DB_PATH)
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Force CPU mode for macOS - disable CUDA
+        self.device = torch.device('cpu')
         # 쿼리 임베딩용
         self.tokenizer = None
         self.model = None

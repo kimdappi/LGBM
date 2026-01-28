@@ -24,9 +24,16 @@ import pickle
 from pathlib import Path
 from typing import List, Dict
 import torch
+import os
 from tqdm import tqdm
 import faiss
-import os
+
+# Force CPU mode for macOS compatibility - disable CUDA and MPS
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+torch.cuda.is_available = lambda: False
+torch.backends.mps.is_available = lambda: False
+
 FAISS_AVAILABLE = True
 from transformers import AutoTokenizer, AutoModel
 TRANSFORMERS_AVAILABLE = True
@@ -104,7 +111,8 @@ class BioBERTEmbedder:
     
     def __init__(self, model_name: str = 'dmis-lab/biobert-v1.1'):
         self.model_name = model_name
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Force CPU mode for macOS - disable CUDA
+        self.device = torch.device('cpu')
         
         print(f"\nBioBERT model on {self.device}")
         

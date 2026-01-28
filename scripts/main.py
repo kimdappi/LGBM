@@ -41,6 +41,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List
 
+# Force CPU mode for macOS compatibility - disable CUDA and MPS
+os.environ['CUDA_VISIBLE_DEVICES'] = ''
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
+import torch
+torch.cuda.is_available = lambda: False
+torch.backends.mps.is_available = lambda: False
+
 # scripts/에서 실행해도 src import 되도록
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -57,8 +65,8 @@ def load_json(path: str) -> Dict[str, Any]:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--patient_json", default="../data/patient.json")
-    parser.add_argument("--out_dir", default="../outputs/reports")
+    parser.add_argument("--patient_json", default="./data/patient.json")
+    parser.add_argument("--out_dir", default="./outputs/reports")
     parser.add_argument("--stream", action="store_true")
     args = parser.parse_args()
 
