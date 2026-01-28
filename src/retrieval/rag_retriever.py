@@ -1,25 +1,284 @@
 """
-RAG Retriever - FAISS 기반 유사 케이스 검색
+RAG Retriever - FAISS 기반 유사 케이스 검색 + LLM 진단 필터링 + Reranking
 이미 생성된 FAISS DB와 metadata.pkl 사용
-텍스트 기반 유사 케이스 검색 (코사인 유사도) 및 전체 메타데이터 반환
+
+3단계 검색:
+  Stage 1: MedCPT Query Encoder + FAISS → top-10 후보 (빠름)
+  Stage 2: LLM 진단 추출 → 유사 진단 필터링 (정확한 recall)
+  Stage 3: Cross-encoder Reranking → top-k 최종 (정확한 ranking)
+  
+임베딩 모델 옵션:
+  - MedCPT (현재): 비대칭 인코더, PubMed 검색 특화
+  - BioLORD: 단일 인코더, UMLS 기반 임상 개념 유사성
 """
 
 import numpy as np
 import pickle
 import faiss
 import torch
+import requests
+import json
+import os
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 from transformers import AutoTokenizer, AutoModel
+from dotenv import load_dotenv
+
+# .env 로드
+env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=env_path)
+
+# Reranker lazy import
+_reranker = None
+
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  Reranker 모델 옵션                                                ║
+# ║                                                                     ║
+# ║  - bge-reranker-v2-m3: Instruction 지원, 다국어, 고성능 (현재)      ║
+# ║  - bge-reranker-base: 기본 모델, instruction 미지원                 ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+_reranker_model_name = "BAAI/bge-reranker-v2-m3"
+# _reranker_model_name = "BAAI/bge-reranker-base"
+
+# Reranker instruction - 임상 유사성 기준 정의
+RERANKER_INSTRUCTION = "Find cases that share the same primary disease mechanism and clinical presentation"
+
+def get_reranker():
+    """Reranker 모델 lazy loading (FlagReranker with instruction support)"""
+    global _reranker
+    if _reranker is None:
+        try:
+            from FlagEmbedding import FlagReranker
+            print(f"[Reranker] Loading {_reranker_model_name} (instruction-tuned)...")
+            _reranker = FlagReranker(_reranker_model_name, use_fp16=True)
+            print(f"[Reranker] Loaded successfully")
+            print(f"[Reranker] Instruction: '{RERANKER_INSTRUCTION}'")
+        except ImportError:
+            print("[Warning] FlagEmbedding not installed. Trying sentence-transformers fallback...")
+            try:
+                from sentence_transformers import CrossEncoder
+                print(f"[Reranker] Loading {_reranker_model_name} via CrossEncoder (no instruction)...")
+                _reranker = ("crossencoder", CrossEncoder(_reranker_model_name, max_length=512))
+                print(f"[Reranker] Loaded (fallback mode, instruction not supported)")
+            except ImportError:
+                print("[Warning] Neither FlagEmbedding nor sentence-transformers installed.")
+                print("  Install: pip install FlagEmbedding")
+                _reranker = "disabled"
+        except Exception as e:
+            print(f"[Warning] Failed to load reranker: {e}")
+            _reranker = "disabled"
+    return _reranker if _reranker != "disabled" else None
+
+
+class DiagnosisExtractor:
+    """LLM 기반 진단 추출기 - 입원 주 원인 vs 동반 질환 구분"""
+    
+    def __init__(self, model: str = "gpt-4o-mini"):
+        self.model = model
+        self.api_url = "https://api.openai.com/v1/chat/completions"
+        self.api_key = os.environ.get("OPENAI_API_KEY", "")
+        self._cache = {}  # 캐싱으로 중복 호출 방지
+    
+    def extract(self, text: str, use_cache: bool = True) -> Dict[str, List[str]]:
+        """
+        임상 텍스트에서 입원 주 원인과 동반 질환을 구분하여 추출
+        
+        Args:
+            text: 임상 텍스트
+            use_cache: 캐시 사용 여부
+        
+        Returns:
+            {
+                'chief_complaint': ['Shortness of breath'],
+                'primary_diagnosis': ['COPD EXACERBATION', 'RESPIRATORY FAILURE'],
+                'comorbidities': ['CAD', 'ATRIAL FIBRILLATION', 'HYPERTENSION']
+            }
+        """
+        # 캐시 확인
+        cache_key = hash(text)
+        if use_cache and cache_key in self._cache:
+            return self._cache[cache_key]
+        
+        if not self.api_key:
+            print("[DiagnosisExtractor] API key not found")
+            return {'chief_complaint': [], 'primary_diagnosis': [], 'comorbidities': []}
+        
+        prompt = f"""Analyze this clinical note and extract diagnoses into THREE categories.
+
+IMPORTANT: Distinguish between:
+1. CHIEF COMPLAINT - Why the patient came to the hospital (the presenting symptom)
+2. PRIMARY DIAGNOSIS - The main condition causing this hospitalization (NOT pre-existing conditions)
+3. COMORBIDITIES - Pre-existing conditions that are NOT the main reason for THIS admission
+
+Example:
+- Patient admitted for "abdominal distension" with history of COPD:
+  - chief_complaint: ["Abdominal distension"]
+  - primary_diagnosis: ["ASCITES", "DECOMPENSATED CIRRHOSIS"]
+  - comorbidities: ["COPD", "HIV"]  ← COPD is comorbidity, NOT primary
+
+- Patient admitted for "shortness of breath" with COPD exacerbation:
+  - chief_complaint: ["Shortness of breath"]
+  - primary_diagnosis: ["COPD EXACERBATION", "RESPIRATORY FAILURE"]
+  - comorbidities: ["CAD", "HYPERTENSION"]
+
+Return ONLY valid JSON:
+{{"chief_complaint": [...], "primary_diagnosis": [...], "comorbidities": [...]}}
+
+Clinical text:
+{text}
+
+JSON:"""
+
+        try:
+            response = requests.post(
+                self.api_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 500
+                },
+                timeout=60
+            )
+            response.raise_for_status()
+            result = response.json()
+            content = result["choices"][0]["message"]["content"].strip()
+            
+            # JSON 파싱
+            extracted = self._parse_structured_diagnoses(content)
+            
+            # 캐시 저장
+            if use_cache:
+                self._cache[cache_key] = extracted
+            
+            return extracted
+            
+        except Exception as e:
+            print(f"[DiagnosisExtractor] LLM failed: {e}")
+            return {'chief_complaint': [], 'primary_diagnosis': [], 'comorbidities': []}
+    
+    def _parse_structured_diagnoses(self, content: str) -> Dict[str, List[str]]:
+        """LLM 응답에서 구조화된 진단 정보 파싱"""
+        default = {'chief_complaint': [], 'primary_diagnosis': [], 'comorbidities': []}
+        
+        try:
+            # JSON 블록 추출
+            if "```" in content:
+                start = content.find("{")
+                end = content.rfind("}") + 1
+                content = content[start:end]
+            
+            data = json.loads(content)
+            
+            result = {}
+            for key in ['chief_complaint', 'primary_diagnosis', 'comorbidities']:
+                if key in data and isinstance(data[key], list):
+                    result[key] = [d.upper().strip() for d in data[key] if isinstance(d, str)]
+                else:
+                    result[key] = []
+            
+            return result
+            
+        except:
+            return default
+    
+    def is_similar(
+        self, 
+        extracted1: Dict[str, List[str]], 
+        extracted2: Dict[str, List[str]], 
+        match_type: str = "primary"
+    ) -> bool:
+        """
+        두 환자가 임상적으로 유사한지 확인 (입원 주 원인 기준)
+        
+        Args:
+            extracted1: 첫 번째 환자의 추출 결과
+            extracted2: 두 번째 환자의 추출 결과
+            match_type: 매칭 기준
+                - "primary": primary_diagnosis만 비교 (권장)
+                - "chief": chief_complaint도 비교
+                - "any": 모든 필드 비교 (기존 방식)
+        
+        Returns:
+            유사 여부
+        """
+        # 이전 버전 호환성: List가 들어오면 primary_diagnosis로 처리
+        if isinstance(extracted1, list):
+            extracted1 = {'primary_diagnosis': extracted1, 'chief_complaint': [], 'comorbidities': []}
+        if isinstance(extracted2, list):
+            extracted2 = {'primary_diagnosis': extracted2, 'chief_complaint': [], 'comorbidities': []}
+        
+        # 추출 실패 시 통과 (필터링 건너뜀)
+        if not extracted1.get('primary_diagnosis') or not extracted2.get('primary_diagnosis'):
+            return True
+        
+        # 동의어 확장
+        def expand_with_synonyms(terms: List[str]) -> Set[str]:
+            synonyms = {
+                "CHF": "HEART FAILURE",
+                "AFIB": "ATRIAL FIBRILLATION", 
+                "CAD": "CORONARY ARTERY DISEASE",
+                "MI": "MYOCARDIAL INFARCTION",
+                "CVA": "STROKE",
+                "COPD EXACERBATION": "COPD",
+                "AECOPD": "COPD EXACERBATION",
+                "RESPIRATORY FAILURE": "RESPIRATORY DISTRESS",
+                "LIVER FAILURE": "HEPATIC FAILURE",
+                "DECOMPENSATED CIRRHOSIS": "CIRRHOSIS",
+            }
+            
+            expanded = set(t.upper().strip() for t in terms)
+            for abbrev, full in synonyms.items():
+                if abbrev in expanded:
+                    expanded.add(full)
+                if full in expanded:
+                    expanded.add(abbrev)
+            return expanded
+        
+        # Primary diagnosis 비교 (핵심!)
+        primary1 = expand_with_synonyms(extracted1.get('primary_diagnosis', []))
+        primary2 = expand_with_synonyms(extracted2.get('primary_diagnosis', []))
+        
+        primary_overlap = len(primary1 & primary2)
+        
+        if match_type == "primary":
+            return primary_overlap >= 1
+        
+        # Chief complaint도 비교
+        if match_type == "chief":
+            chief1 = expand_with_synonyms(extracted1.get('chief_complaint', []))
+            chief2 = expand_with_synonyms(extracted2.get('chief_complaint', []))
+            chief_overlap = len(chief1 & chief2)
+            return primary_overlap >= 1 or chief_overlap >= 1
+        
+        # Any: 동반 질환도 포함 (기존 방식, 권장하지 않음)
+        all1 = primary1 | expand_with_synonyms(extracted1.get('comorbidities', []))
+        all2 = primary2 | expand_with_synonyms(extracted2.get('comorbidities', []))
+        return len(all1 & all2) >= 1
+
 
 BASE_DIR = Path(__file__).resolve().parents[2]  # project root
 DEFAULT_DB_PATH = BASE_DIR / "data" / "vector_db"
 
 class VectorDBManager:
     """FAISS 벡터 DB 관리 클래스 - 기존 DB 로드"""
+    # MedCPT (현재 사용)
+    EMBEDDING_MODEL = 'ncbi/MedCPT-Query-Encoder'
     
-    def __init__(self, embedding_model: str = 'dmis-lab/biobert-v1.1', db_path: str = '../data/vector_db'):
-        self.embedding_model = embedding_model
+    # BioLORD (대안) - 위 줄 주석처리 후 아래 주석해제
+    # EMBEDDING_MODEL = 'FremyCompany/BioLORD-2023-M'
+    
+    def __init__(self, embedding_model: str = None, db_path: str = '../data/vector_db'):
+        """
+        임베딩 모델 옵션:
+        - ncbi/MedCPT-Query-Encoder: 검색 쿼리용 (DB는 Article-Encoder로 구축)
+        - FremyCompany/BioLORD-2023-M: 단일 인코더, 임상 개념 유사성 특화
+        """
+        self.embedding_model = embedding_model or self.EMBEDDING_MODEL
         self.db_path = Path(DEFAULT_DB_PATH)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # 쿼리 임베딩용
@@ -30,8 +289,9 @@ class VectorDBManager:
         self.metadata = []
         
     def load(self):
-        """기존 벡터 DB 및 BioBERT 모델 로드"""
+        """기존 벡터 DB 및 임베딩 모델 로드"""
         print(f"\n[VectorDBManager]")
+        print(f"  - 임베딩 모델: {self.embedding_model}")
         
         self.tokenizer = AutoTokenizer.from_pretrained(self.embedding_model)
         self.model = AutoModel.from_pretrained(self.embedding_model).to(self.device)
@@ -70,34 +330,181 @@ class VectorDBManager:
         
         return embedding.astype(np.float32)
     
-    def search(self, query_text: str, top_k: int = 3) -> List[Dict]:
+    def search(
+        self, 
+        query_text: str, 
+        top_k: int = 3, 
+        exclude_id: str = None,
+        use_reranker: bool = True,
+        use_diagnosis_filter: bool = True,
+        rerank_top_n: int = 10  # 작은 DB용
+    ) -> List[Dict]:
         """
-        유사 케이스 검색 - 기존 FAISS DB에서 검색
+        유사 케이스 검색 - 3단계 검색 (FAISS + 진단 필터링 + Reranking)
         
         Args:
             query_text: 검색할 텍스트
-            top_k: 반환할 결과 수
+            top_k: 최종 반환할 결과 수
+            exclude_id: 제외할 환자 ID (자기 자신 제외용)
+            use_reranker: Reranker 사용 여부
+            use_diagnosis_filter: LLM 진단 필터링 사용 여부
+            rerank_top_n: Stage 1에서 가져올 후보 수
         
         Returns:
             유사 케이스 리스트 (text + 전체 metadata + similarity 포함)
         """
-        # 쿼리 임베딩
-        query_vector = self.embed_text(query_text)
-        faiss.normalize_L2(query_vector) #L2 정규화
-        similarities, indices = self.index.search(query_vector, top_k)
         
-        # 결과 구성
-        results = []
+        print(f"\n[Stage 1] FAISS 검색: top-{rerank_top_n} 후보")
+        
+        # 자기 자신이 포함될 수 있으므로 여유있게 가져옴
+        fetch_k = rerank_top_n + 10 if exclude_id else rerank_top_n
+        
+        query_vector = self.embed_text(query_text)
+        faiss.normalize_L2(query_vector)
+        similarities, indices = self.index.search(query_vector, fetch_k)
+        
+        # 결과 구성 (자기 자신 제외)
+        candidates = []
         for dist, idx in zip(similarities[0], indices[0]):
-            
-            # 메타데이터에서 전체 record 가져오기
-            # metadata.pkl에는 이미 text 포함된 전체 데이터가 저장되어 있음
             record = self.metadata[idx].copy()
             record['similarity'] = float(dist)
             
-            results.append(record)
+            # 자기 자신 제외
+            if exclude_id and str(record.get('id')) == str(exclude_id):
+                continue
+                
+            candidates.append(record)
+            
+            if len(candidates) >= rerank_top_n:
+                break
         
-        return results
+        print(f"  → {len(candidates)}개 후보 검색됨")
+        
+        # 진단 필터링
+        if use_diagnosis_filter and len(candidates) > top_k:
+            candidates = self._filter_by_diagnosis(query_text, candidates)
+        
+        # Reranker
+        if use_reranker and len(candidates) > top_k:
+            candidates = self._rerank(query_text, candidates, top_k)
+        else:
+            candidates = candidates[:top_k]
+        
+        return candidates
+    
+    def _filter_by_diagnosis(self, query_text: str, candidates: List[Dict]) -> List[Dict]:
+        """
+        LLM으로 진단 추출 후 유사 진단 필터링
+        
+        핵심: PRIMARY DIAGNOSIS (입원 주 원인)만 비교
+              COMORBIDITIES (동반 질환)는 매칭에서 제외
+        
+        Args:
+            query_text: 쿼리 텍스트
+            candidates: Stage 1 후보들
+        
+        Returns:
+            입원 주 원인이 유사한 후보들만 필터링
+        """
+        print(f"\n[Stage 2] LLM 진단 필터링 (Primary Diagnosis 기준)")
+        
+        extractor = DiagnosisExtractor()
+        
+        # 쿼리 환자의 진단 추출 (구조화된 형태)
+        query_extracted = extractor.extract(query_text)
+        print(f"  쿼리 환자:")
+        print(f"    - Chief Complaint: {query_extracted.get('chief_complaint', [])}")
+        print(f"    - Primary Diagnosis: {query_extracted.get('primary_diagnosis', [])}")
+        print(f"    - Comorbidities: {query_extracted.get('comorbidities', [])} (매칭 제외)")
+        
+        if not query_extracted.get('primary_diagnosis'):
+            print("  → Primary diagnosis 추출 실패, 필터링 건너뜀")
+            return candidates
+        
+        # 후보들 필터링 (Primary Diagnosis 기준)
+        filtered = []
+        for c in candidates:
+            candidate_extracted = extractor.extract(c.get('text', ''))
+            
+            # Primary Diagnosis만 비교 (핵심!)
+            if extractor.is_similar(query_extracted, candidate_extracted, match_type="primary"):
+                c['extracted_diagnoses'] = candidate_extracted
+                filtered.append(c)
+        
+        print(f"  → {len(candidates)}개 → {len(filtered)}개 (Primary Diagnosis 일치)")
+        
+        # 필터링된 케이스 미리보기
+        for i, c in enumerate(filtered[:5]):
+            primary = c.get('extracted_diagnoses', {}).get('primary_diagnosis', [])
+            print(f"    {i+1}. ID={c.get('id')}: {primary}")
+        
+        # 필터링 결과가 너무 적으면 원본 유지
+        if len(filtered) < 3:
+            print(f"  → 필터링 결과 부족 ({len(filtered)}개), 원본 상위 10개 유지")
+            return candidates[:10]
+        
+        return filtered
+    
+    def _rerank(self, query_text: str, candidates: List[Dict], top_k: int) -> List[Dict]:
+        """
+        Instruction-tuned Cross-encoder로 후보 reranking
+        
+        Instruction: "Find cases that share the same primary disease mechanism"
+        → 단순 텍스트 유사도가 아닌 질환 메커니즘 기반 유사성 평가
+        
+        Args:
+            query_text: 쿼리 텍스트
+            candidates: Stage 1에서 검색된 후보들
+            top_k: 최종 반환할 개수
+        
+        Returns:
+            Reranking된 상위 top_k 케이스
+        """
+        reranker = get_reranker()
+        
+        if reranker is None:
+            # Reranker 사용 불가 시 원래 순서 유지
+            print("[Reranker] Disabled, using original order")
+            return candidates[:top_k]
+        
+        # Query-Candidate 쌍 생성
+        pairs = []
+        for c in candidates:
+            candidate_text = c.get('text', '')
+            pairs.append([query_text, candidate_text])
+        
+        # Reranker 타입에 따른 점수 산출
+        print(f"[Reranker] Scoring {len(pairs)} candidates...")
+        
+        if isinstance(reranker, tuple) and reranker[0] == "crossencoder":
+            # Fallback: CrossEncoder (instruction 미지원)
+            print("[Reranker] Using CrossEncoder fallback (no instruction)")
+            scores = reranker[1].predict(pairs)
+        else:
+            # FlagReranker with instruction
+            print(f"[Reranker] Instruction: '{RERANKER_INSTRUCTION}'")
+            scores = reranker.compute_score(
+                pairs,
+                normalize=True  # 0-1 범위로 정규화
+            )
+            # compute_score는 단일 쌍이면 float, 여러 쌍이면 list 반환
+            if not isinstance(scores, list):
+                scores = [scores]
+        
+        # 점수로 재정렬
+        for i, c in enumerate(candidates):
+            c['rerank_score'] = float(scores[i])
+            c['original_similarity'] = c['similarity']
+            c['similarity'] = float(scores[i])  # rerank score를 메인 유사도로
+        
+        # 높은 점수 순 정렬
+        candidates.sort(key=lambda x: x['rerank_score'], reverse=True)
+        
+        print(f"[Reranker] Top-{top_k} selected (by primary disease mechanism similarity)")
+        for i, c in enumerate(candidates[:top_k]):
+            print(f"  {i+1}. ID={c.get('id')}, rerank={c['rerank_score']:.3f}, orig={c['original_similarity']:.3f}")
+        
+        return candidates[:top_k]
 
 class RAGRetriever:
     """유사 케이스 검색기 - cohort_data 반환"""
@@ -105,7 +512,7 @@ class RAGRetriever:
     def __init__(
         self,
         db_path: str = 'data/vector_db',
-        embedding_model: str = 'dmis-lab/biobert-v1.1'
+        embedding_model: str = 'ncbi/MedCPT-Query-Encoder'
     ):
         self.vector_db = VectorDBManager(
             embedding_model=embedding_model,
@@ -119,19 +526,38 @@ class RAGRetriever:
         self.is_loaded = True
         print(f"\n RAG Retriever 로드 완료: {len(self.vector_db.metadata)}건")
     
-    def retrieve(self, query_text: str, top_k: int = 3) -> Dict:
+    def retrieve(
+        self, 
+        query_text: str, 
+        top_k: int = 3,
+        exclude_id: str = None,
+        use_reranker: bool = True,
+        use_diagnosis_filter: bool = True,
+        rerank_top_n: int = 10
+    ) -> Dict:
         """
-        유사 케이스 검색 및 cohort_data 반환
+        유사 케이스 검색 및 cohort_data 반환 (3단계 검색)
         
         Args:
             query_text: 검색할 텍스트
-            top_k: 반환할 결과 수
+            top_k: 최종 반환할 결과 수
+            exclude_id: 제외할 환자 ID (자기 자신 제외)
+            use_reranker: Reranker 사용 여부
+            use_diagnosis_filter: LLM 진단 필터링 사용 여부
+            rerank_top_n: Stage 1에서 가져올 후보 수
         """
         if not self.is_loaded:
             self.load()
         
-        # 유사 케이스 검색
-        similar_cases = self.vector_db.search(query_text, top_k=top_k)
+        # 유사 케이스 검색 (3단계: FAISS → 진단필터링 → Reranking)
+        similar_cases = self.vector_db.search(
+            query_text, 
+            top_k=top_k,
+            exclude_id=exclude_id,
+            use_reranker=use_reranker,
+            use_diagnosis_filter=use_diagnosis_filter,
+            rerank_top_n=rerank_top_n
+        )
         
         # 생존 통계 계산
         stats = self._calculate_stats(similar_cases)
@@ -144,7 +570,14 @@ class RAGRetriever:
         
         return cohort_data
     
-    def retrieve_with_patient(self, patient_data: Dict, top_k: int = 3) -> Dict:
+    def retrieve_with_patient(
+        self, 
+        patient_data: Dict, 
+        top_k: int = 3,
+        use_reranker: bool = True,
+        use_diagnosis_filter: bool = True,
+        rerank_top_n: int = 10
+    ) -> Dict:
         """
         환자 데이터로 유사 케이스 검색 및 cohort_data 반환
         
@@ -162,13 +595,25 @@ class RAGRetriever:
                     'disposition': str,
                     'text': str
                 }
-            top_k: 반환할 결과 수
+            top_k: 최종 반환할 결과 수
+            use_reranker: Reranker 사용 여부
+            use_diagnosis_filter: LLM 진단 필터링 사용 여부
+            rerank_top_n: Stage 1에서 가져올 후보 수
         
         Returns:
             cohort_data (위와 동일)
         """
         query_text = patient_data.get('text', '')
-        return self.retrieve(query_text, top_k=top_k)
+        patient_id = patient_data.get('id')  # 자기 자신 제외용
+        
+        return self.retrieve(
+            query_text, 
+            top_k=top_k,
+            exclude_id=patient_id,
+            use_reranker=use_reranker,
+            use_diagnosis_filter=use_diagnosis_filter,
+            rerank_top_n=rerank_top_n
+        )
     
     def _calculate_stats(self, similar_cases: List[Dict]) -> Dict:
         """

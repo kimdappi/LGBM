@@ -56,9 +56,12 @@ def load_json(path: str) -> Dict[str, Any]:
 
 
 def main():
+    # 프로젝트 루트 경로 (scripts/ 폴더에서 실행해도 정상 작동)
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--patient_json", default="../data/patient.json")
-    parser.add_argument("--out_dir", default="../outputs/reports")
+    parser.add_argument("--patient_json", default=str(PROJECT_ROOT / "data" / "patient.json"))
+    parser.add_argument("--out_dir", default=str(PROJECT_ROOT / "outputs" / "reports"))
     parser.add_argument("--stream", action="store_true")
     args = parser.parse_args()
 
@@ -78,7 +81,8 @@ def main():
     similar_cases: List[Dict[str, Any]] = cohort_data.get("similar_cases", [])
 
     # 2) Comparator: 입력은 cohort_data 하나
-    comparator = CohortComparator(model="mistralai/Mistral-7B-Instruct-v0.3")
+    # OpenAI API 사용 (gpt-4o-mini 기본값)
+    comparator = CohortComparator(model="gpt-4o-mini")
     similar_case_patterns: Dict[str, Any] = comparator.analyze_cohort(cohort_data)
 
     # Reasoner / ReportGenerator가 기대하는 survival_stats를 main에서 보강
@@ -101,24 +105,11 @@ def main():
         stream=args.stream
     )
 
-    # 4) Verifier: similar_cases 스키마 어댑터 (anchor_age/gender/hospital_expire_flag 맞추기)
-    def adapt_case_for_verifier(c: Dict[str, Any]) -> Dict[str, Any]:
-        out = dict(c)
-        # Verifier가 보는 키로 맞춤
-        out["anchor_age"] = out.get("anchor_age", out.get("age"))
-        out["gender"] = out.get("gender", out.get("sex"))
-        # hospital_expire_flag: 1이면 DIED, 0이면 SURVIVED
-        if "hospital_expire_flag" not in out:
-            status = str(out.get("status", "")).lower()
-            out["hospital_expire_flag"] = 1 if status == "dead" else 0
-        return out
-
-    verifier_cases = [adapt_case_for_verifier(c) for c in similar_cases[:3]]
-
+    # 4) Verifier: critique에 대한 해결책 생성 (유사 케이스 근거 기반)
     verifier = Verifier()
     solution: Dict[str, Any] = verifier.verify(
         critique=critique,
-        similar_cases_topk=verifier_cases
+        similar_cases_topk=similar_cases[:3]
     )
 
     # 5) ReportGenerator: 클래스 기반 generate → save

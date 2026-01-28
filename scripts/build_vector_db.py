@@ -1,14 +1,18 @@
 """
-의료 데이터 처리 및 BioBERT 벡터 DB 생성 파이프라인
+의료 데이터 처리 및 벡터 DB 생성 파이프라인
 
 필수 패키지 설치:
     pip install transformers torch faiss-cpu pandas tqdm --break-system-packages
+
+임베딩 모델 옵션:
+- MedCPT (현재): ncbi/MedCPT-Article-Encoder (비대칭, 검색 특화)
+- BioLORD (대안): FremyCompany/BioLORD-2023-M (단일, 개념 유사성)
 
 작업 순서:
 1. CSV 데이터 로드 (flag_1: dead, flag_0: alive)
 2. hospital_expire_flag를 status로 매핑 (0→alive, 1→dead)
 3. 필요한 컬럼 추출 및 JSON 변환
-4. BioBERT로 텍스트 임베딩 생성
+4. 임베딩 모델로 텍스트 임베딩 생성
 5. FAISS 벡터 데이터베이스 생성 및 저장
 
 출력:
@@ -26,9 +30,13 @@ from typing import List, Dict
 import torch
 from tqdm import tqdm
 import faiss
+import os
 FAISS_AVAILABLE = True
 from transformers import AutoTokenizer, AutoModel
 TRANSFORMERS_AVAILABLE = True
+
+# 프로젝트 루트 경로 설정 (scripts/ 폴더에서 실행해도 정상 작동)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class MedicalDataLoader:
@@ -95,21 +103,34 @@ class MedicalDataLoader:
         
         print(f"데이터 저장: {output_path}")
 
-class BioBERTEmbedder:
-    """BioBERT를 사용한 텍스트 임베딩 클래스"""
+# MedCPT (현재 사용)
+EMBEDDING_MODEL = 'ncbi/MedCPT-Article-Encoder'
+
+# BioLORD (대안) - 위 줄 주석처리 후 아래 주석해제
+# EMBEDDING_MODEL = 'FremyCompany/BioLORD-2023-M'
+
+
+class MedCPTEmbedder:
+    """임상 텍스트 임베딩 클래스
     
-    def __init__(self, model_name: str = 'dmis-lab/biobert-v1.1'):
-        self.model_name = model_name
+    지원 모델:
+    - ncbi/MedCPT-Article-Encoder: 문서 임베딩용 (비대칭)
+    - FremyCompany/BioLORD-2023-M: 단일 인코더 (대칭)
+    """
+    
+    def __init__(self, model_name: str = None):
+        self.model_name = model_name or EMBEDDING_MODEL
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        print(f"\nBioBERT model on {self.device}")
+        print(f"\n임베딩 모델: {self.model_name}")
+        print(f"Device: {self.device}")
         
         # 토크나이저와 모델 로드
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModel.from_pretrained(self.model_name).to(self.device)
         self.model.eval()
         
-        print("BioBERT 모델 로드 완료")
+        print("모델 로드 완료")
     
     def embed_batch(self, texts: List[str], batch_size: int = 8, max_length: int = 512) -> np.ndarray:
         """여러 텍스트를 배치로 임베딩"""
@@ -192,24 +213,24 @@ def run_pipeline(
     print("Medical Data Processing & BioBERT FAISS DB Creation Pipeline")
     print("="*70)
     
-    # 1. 데이터 로드 및 전처리
+    # 데이터
 
     loader = MedicalDataLoader(dead_file, alive_file)
     records = loader.load_and_process()
     loader.save_to_json(records, json_output)
     
-    # 2. BioBERT 임베딩 생성
+    # 임베딩
 
-    embedder = BioBERTEmbedder()
+    embedder = MedCPTEmbedder()
     texts = [record['text'] for record in records]
     embeddings = embedder.embed_batch(texts, batch_size=batch_size, max_length=max_length)
     
-    # 3. FAISS 벡터 DB 생성
+    # 벡터DB
 
     vector_db = FAISSVectorDB(dimension=768)
     vector_db.add_vectors(embeddings, records)
     
-    # 4. 벡터 DB 저장
+    # db 저장
     vector_db.save(vector_db_output)
     
     print("\n" + "="*70)
@@ -218,12 +239,12 @@ def run_pipeline(
 
 
 def main():
-    """메인 실행"""
+    """실행"""
     run_pipeline(
-        dead_file='data/flag_1_textclean.csv',
-        alive_file='data/flag_0_textclean.csv',
-        json_output='data/processed_data.json',
-        vector_db_output='data/vector_db',
+        dead_file=str(PROJECT_ROOT / 'data' / 'flag_1_textclean.csv'),
+        alive_file=str(PROJECT_ROOT / 'data' / 'flag_0_textclean.csv'),
+        json_output=str(PROJECT_ROOT / 'data' / 'processed_data.json'),
+        vector_db_output=str(PROJECT_ROOT / 'data' / 'vector_db'),
         batch_size=8,
         max_length=512
     )

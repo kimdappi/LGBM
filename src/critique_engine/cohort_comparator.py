@@ -1,10 +1,10 @@
-f"""
+"""
 코호트 비교 모듈 - 유사 환자끼리 치료 패턴 비교
 
 [흐름]
 1. rag_retriever에서 검색된 유사 케이스를 받음 (text 및 메타데이터 모두)
 2. 코호트 간 치료 패턴 비교하고 생존/사망 통계 분석
-3. Hugging Face LLM으로 임상 패턴 심층 분석 (무료)
+3. OpenAI LLM으로 임상 패턴 심층 분석
 4. 비교 결과 반환 (similar_case_patterns 변수로 레포트 생성에 사용 예정)
 """
 
@@ -16,7 +16,10 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
-load_dotenv()
+
+# .env 파일 경로를 프로젝트 루트 기준으로 설정
+env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=env_path)
 
 
 class CohortComparator:
@@ -235,7 +238,7 @@ Provide concise, actionable insights for each category.
         return prompt
     
     def _analyze_clinical_text_with_llm(self, cases: List[Dict]) -> Dict:
-        """Hugging Face API를 사용한 임상 텍스트 패턴 분석"""
+        """OpenAI API를 사용한 임상 텍스트 패턴 분석"""
         
         # 각 케이스 요약 준비
         case_summaries = []
@@ -253,7 +256,7 @@ Provide concise, actionable insights for each category.
         # LLM 프롬프트 구성
         prompt = self._build_clinical_analysis_prompt(case_summaries)
         
-        # Hugging Face API 호출
+        # OpenAI API 호출
         llm_analysis = self._call_llm_api(prompt)
         
         return {
@@ -284,7 +287,7 @@ Keep the analysis concise and focus on actionable clinical insights.
         return prompt
     
     def _compare_outcomes_with_llm(self, cases: List[Dict]) -> Dict:
-        """Hugging Face API를 사용한 생존 vs 사망 그룹 비교"""
+        """OpenAI API를 사용한 생존 vs 사망 그룹 비교"""
         survived_cases = [c for c in cases if c['status'] == 'alive']
         died_cases = [c for c in cases if c['status'] == 'dead']
         
@@ -358,6 +361,4 @@ Keep the analysis concise and clinically relevant.
 """
         
         return prompt
-        
-        return summary
     
