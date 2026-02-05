@@ -56,7 +56,6 @@ class ReportGenerator:
                     'admission_location': str,
                     'discharge_location': str,
                     'arrival_transport': str,
-                    'disposition': str,
                     'text': str
                 }
             cohort_data: retriever에서 반환된 유사 케이스 데이터

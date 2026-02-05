@@ -29,19 +29,20 @@ env_path = Path(__file__).resolve().parents[2] / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Reranker lazy import
-_reranker = None
+_reranker = None #초기화
 
-# ╔═══════════════════════════════════════════════════════════════════╗
-# ║  Reranker 모델 옵션                                                ║
-# ║                                                                     ║
-# ║  - bge-reranker-v2-m3: Instruction 지원, 다국어, 고성능 (현재)      ║
-# ║  - bge-reranker-base: 기본 모델, instruction 미지원                 ║
-# ╚═══════════════════════════════════════════════════════════════════╝
 _reranker_model_name = "BAAI/bge-reranker-v2-m3"
 # _reranker_model_name = "BAAI/bge-reranker-base"
 
-# Reranker instruction - 임상 유사성 기준 정의
-RERANKER_INSTRUCTION = "Find cases that share the same primary disease mechanism and clinical presentation"
+# 의료 특화 리랭커 옵션 (향후 고려):
+# - MedCPT는 bi-encoder만 있고 cross-encoder는 없음
+# - BioLinkBERT, PubMedBERT 기반 cross-encoder 직접 파인튜닝 필요
+# → 현재는 BGE-Reranker + M&M 특화 instruction 사용
+
+# Reranker instruction - M&M 컨퍼런스 목적에 맞춘 케이스 검색
+# M&M의 목표: 비판점 도출 및 해결책 학습
+# → 비슷한 임상 상황에서 진단/치료 의사결정에 교훈을 줄 수 있는 케이스
+RERANKER_INSTRUCTION = "Find cases with similar clinical presentations that provide lessons about diagnosis, treatment decisions, or potential complications"
 
 def get_reranker():
     """Reranker 모델 lazy loading (FlagReranker with instruction support)"""
@@ -105,29 +106,16 @@ class DiagnosisExtractor:
         
         prompt = f"""Analyze this clinical note and extract diagnoses into THREE categories.
 
-IMPORTANT: Distinguish between:
-1. CHIEF COMPLAINT - Why the patient came to the hospital (the presenting symptom)
-2. PRIMARY DIAGNOSIS - The main condition causing this hospitalization (NOT pre-existing conditions)
-3. COMORBIDITIES - Pre-existing conditions that are NOT the main reason for THIS admission
+Definitions:
+- chief_complaint: presenting symptom/reason for visit
+- primary_diagnosis: main cause of THIS hospitalization
+- comorbidities: pre-existing conditions, not the main cause
 
-Example:
-- Patient admitted for "abdominal distension" with history of COPD:
-  - chief_complaint: ["Abdominal distension"]
-  - primary_diagnosis: ["ASCITES", "DECOMPENSATED CIRRHOSIS"]
-  - comorbidities: ["COPD", "HIV"]  ← COPD is comorbidity, NOT primary
-
-- Patient admitted for "shortness of breath" with COPD exacerbation:
-  - chief_complaint: ["Shortness of breath"]
-  - primary_diagnosis: ["COPD EXACERBATION", "RESPIRATORY FAILURE"]
-  - comorbidities: ["CAD", "HYPERTENSION"]
-
-Return ONLY valid JSON:
+Return ONLY JSON:
 {{"chief_complaint": [...], "primary_diagnosis": [...], "comorbidities": [...]}}
 
-Clinical text:
-{text}
-
-JSON:"""
+Text:
+{text}"""
 
         try:
             response = requests.post(
@@ -413,8 +401,8 @@ class VectorDBManager:
         # 쿼리 환자의 진단 추출 (구조화된 형태)
         query_extracted = extractor.extract(query_text)
         print(f"  쿼리 환자:")
-        print(f"    - Chief Complaint: {query_extracted.get('chief_complaint', [])}")
-        print(f"    - Primary Diagnosis: {query_extracted.get('primary_diagnosis', [])}")
+        print(f"    - Primary Diagnosis: {query_extracted.get('primary_diagnosis', [])} (검색 사용 ✅)")
+        print(f"    - Chief Complaint: {query_extracted.get('chief_complaint', [])} (참고용)")
         print(f"    - Comorbidities: {query_extracted.get('comorbidities', [])} (매칭 제외)")
         
         if not query_extracted.get('primary_diagnosis'):
@@ -485,24 +473,29 @@ class VectorDBManager:
             print(f"[Reranker] Instruction: '{RERANKER_INSTRUCTION}'")
             scores = reranker.compute_score(
                 pairs,
-                normalize=True  # 0-1 범위로 정규화
+                normalize=False  # Raw logit 사용 (순서만 중요, 절댓값 무의미)
             )
             # compute_score는 단일 쌍이면 float, 여러 쌍이면 list 반환
             if not isinstance(scores, list):
                 scores = [scores]
         
-        # 점수로 재정렬
+        # 점수로 재정렬 (순서만 바꾸고 similarity는 FAISS 원본 유지)
         for i, c in enumerate(candidates):
             c['rerank_score'] = float(scores[i])
-            c['original_similarity'] = c['similarity']
-            c['similarity'] = float(scores[i])  # rerank score를 메인 유사도로
+            # CRITICAL: similarity는 FAISS 원본 유지 (0.7 임계치 체크용)
+            # 리랭커 스코어는 순서 정렬에만 사용
         
-        # 높은 점수 순 정렬
+        # 🔍 DEBUG: 전체 리랭커 스코어 분포 확인
+        all_rerank_scores = [c['rerank_score'] for c in candidates]
+        print(f"[Reranker] Score 분포: min={min(all_rerank_scores):.3f}, max={max(all_rerank_scores):.3f}, avg={sum(all_rerank_scores)/len(all_rerank_scores):.3f}")
+        print(f"[Reranker] 전체 {len(candidates)}개 스코어: {[f'{s:.3f}' for s in sorted(all_rerank_scores, reverse=True)]}")
+        
+        # 높은 rerank_score 순 정렬
         candidates.sort(key=lambda x: x['rerank_score'], reverse=True)
         
-        print(f"[Reranker] Top-{top_k} selected (by primary disease mechanism similarity)")
+        print(f"[Reranker] Top-{top_k} selected (순서=rerank, 유사도=FAISS 원본)")
         for i, c in enumerate(candidates[:top_k]):
-            print(f"  {i+1}. ID={c.get('id')}, rerank={c['rerank_score']:.3f}, orig={c['original_similarity']:.3f}")
+            print(f"  {i+1}. ID={c.get('id')}, similarity={c['similarity']:.3f} (FAISS ✅), rerank={c['rerank_score']:.3f} (순서)")
         
         return candidates[:top_k]
 
@@ -559,16 +552,31 @@ class RAGRetriever:
             rerank_top_n=rerank_top_n
         )
         
-        # 생존 통계 계산
-        stats = self._calculate_stats(similar_cases)
-        
         # cohort_data 구성
         cohort_data = {
             'similar_cases': similar_cases,
-            'stats': stats
+            'stats': self._calculate_stats(similar_cases)
         }
         
         return cohort_data
+    
+    def _calculate_stats(self, similar_cases: List[Dict]) -> Dict:
+        """유사 케이스 통계 계산"""
+        if not similar_cases:
+            return {'total': 0, 'expired_count': 0, 'survival_rate': None}
+        
+        total = len(similar_cases)
+        expired_count = sum(
+            1 for c in similar_cases 
+            if c.get('status', '').lower() in ['expired', 'died', 'death']
+        )
+        survival_rate = (total - expired_count) / total if total > 0 else None
+        
+        return {
+            'total': total,
+            'expired_count': expired_count,
+            'survival_rate': survival_rate
+        }
     
     def retrieve_with_patient(
         self, 
@@ -592,7 +600,6 @@ class RAGRetriever:
                     'admission_location': str,
                     'discharge_location': str,
                     'arrival_transport': str,
-                    'disposition': str,
                     'text': str
                 }
             top_k: 최종 반환할 결과 수
@@ -603,8 +610,9 @@ class RAGRetriever:
         Returns:
             cohort_data (위와 동일)
         """
-        query_text = patient_data.get('text', '')
-        patient_id = patient_data.get('id')  # 자기 자신 제외용
+        # 'text' 또는 'clinical_text' 키 모두 지원
+        query_text = patient_data.get('text', '') or patient_data.get('clinical_text', '')
+        patient_id = patient_data.get('id') or patient_data.get('patient_id')  # 자기 자신 제외용
         
         return self.retrieve(
             query_text, 
@@ -614,32 +622,3 @@ class RAGRetriever:
             use_diagnosis_filter=use_diagnosis_filter,
             rerank_top_n=rerank_top_n
         )
-    
-    def _calculate_stats(self, similar_cases: List[Dict]) -> Dict:
-        """
-        유사 케이스의 생존 통계 계산
-        
-        Args:
-            similar_cases: 검색된 케이스 리스트
-        
-        Returns:
-            생존 통계
-        """
-        if not similar_cases:
-            return {
-                'total': 0,
-                'alive': 0,
-                'dead': 0,
-                'survival_rate': 0.0
-            }
-        
-        total = len(similar_cases)
-        alive_count = sum(1 for c in similar_cases if c.get('status') == 'alive')
-        dead_count = total - alive_count
-        
-        return {
-            'total': total,
-            'alive': alive_count,
-            'dead': dead_count,
-            'survival_rate': alive_count / total if total > 0 else 0.0
-        }

@@ -9,11 +9,12 @@
 - BioLORD (대안): FremyCompany/BioLORD-2023-M (단일, 개념 유사성)
 
 작업 순서:
-1. CSV 데이터 로드 (flag_1: dead, flag_0: alive)
-2. hospital_expire_flag를 status로 매핑 (0→alive, 1→dead)
-3. 필요한 컬럼 추출 및 JSON 변환
-4. 임베딩 모델로 텍스트 임베딩 생성
-5. FAISS 벡터 데이터베이스 생성 및 저장
+1. CSV 데이터 로드 (df_flag0_final_processed.csv + df_flag1_final_processed.csv)
+2. 두 파일 병합 (flag0 + flag1)
+3. hospital_expire_flag를 status로 매핑 (0→alive, 1→dead)
+4. 필요한 컬럼 추출 및 JSON 변환
+5. 임베딩 모델로 텍스트 임베딩 생성
+6. FAISS 벡터 데이터베이스 생성 및 저장
 
 출력:
 - data/processed_data.json (전처리된 데이터)
@@ -42,20 +43,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 class MedicalDataLoader:
     """의료 데이터 로더 클래스"""
     
-    def __init__(self, dead_file_path: str, alive_file_path: str):
-        self.dead_file_path = dead_file_path
-        self.alive_file_path = alive_file_path
+    def __init__(self, flag0_file: str, flag1_file: str):
+        self.flag0_file = flag0_file
+        self.flag1_file = flag1_file
         
     def load_and_process(self) -> List[Dict]:
         """데이터를 로드하고 전처리하여 JSON 형식으로 반환"""
         
-        # 데이터 로드
-        print(f"\nLoading data files...")
-        df_dead = pd.read_csv(self.dead_file_path)
-        df_alive = pd.read_csv(self.alive_file_path)
+        # 두 데이터 파일 로드
+        print(f"\nLoading flag0 data file: {self.flag0_file}")
+        df_flag0 = pd.read_csv(self.flag0_file)
+        print(f"Flag0 rows loaded: {len(df_flag0)}")
         
-        # 데이터 합치기
-        df = pd.concat([df_dead, df_alive], ignore_index=True)
+        print(f"\nLoading flag1 data file: {self.flag1_file}")
+        df_flag1 = pd.read_csv(self.flag1_file)
+        print(f"Flag1 rows loaded: {len(df_flag1)}")
+        
+        # 두 데이터프레임 병합
+        df = pd.concat([df_flag0, df_flag1], ignore_index=True)
+        print(f"\nTotal rows after merge: {len(df)}")
         
         # 필요한 컬럼만 선택
         required_columns = [
@@ -67,29 +73,45 @@ class MedicalDataLoader:
             'admission_location', 
             'discharge_location', 
             'arrival_transport', 
-            'disposition', 
             'text'
         ]
         
+        # 필요한 컬럼이 데이터프레임에 있는지 확인
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+        
+        # 필요한 컬럼만 선택
+        df = df[required_columns]
+        
+        # 모든 필수 컬럼에 결측치가 하나라도 있는 행 제거
+        df_clean = df.dropna()
+        
+        removed_count = len(df) - len(df_clean)
+        print(f"Removed {removed_count} rows with NaN values")
+        print(f"Remaining rows: {len(df_clean)}")
+        
         # JSON 형식으로 변환
         records = []
-        for _, row in df.iterrows():
+        
+        for _, row in df_clean.iterrows():
             # hospital_expire_flag를 status로 매핑
             status = 'dead' if row['hospital_expire_flag'] == 1 else 'alive'
             
             record = {
-                'id': str(row['stay_id']),
+                'id': str(int(row['stay_id'])),
                 'status': status,
-                'sex': row['gender'],
+                'sex': str(row['gender']),
                 'age': int(row['anchor_age']),
-                'admission_type': row['admission_type'],
-                'admission_location': row['admission_location'],
-                'discharge_location': row['discharge_location'],
-                'arrival_transport': row['arrival_transport'],
-                'disposition': row['disposition'],
-                'text': row['text']
+                'admission_type': str(row['admission_type']),
+                'admission_location': str(row['admission_location']),
+                'discharge_location': str(row['discharge_location']),
+                'arrival_transport': str(row['arrival_transport']),
+                'text': str(row['text'])
             }
             records.append(record)
+        
+        print(f"Successfully processed: {len(records)} records")
         
         return records
     
@@ -201,8 +223,8 @@ class FAISSVectorDB:
 #파이프라인
 
 def run_pipeline(
-    dead_file: str,
-    alive_file: str,
+    flag0_file: str,
+    flag1_file: str,
     json_output: str = "data/processed_data.json",
     vector_db_output: str = "data/vector_db",
     batch_size: int = 8,
@@ -210,12 +232,12 @@ def run_pipeline(
 ):
     """FAISS DB 생성 파이프라인 실행"""
     print("\n" + "="*70)
-    print("Medical Data Processing & BioBERT FAISS DB Creation Pipeline")
+    print("Medical Data Processing & MedCPT FAISS DB Creation Pipeline")
     print("="*70)
     
-    # 데이터
+    # 데이터 로딩 (flag0 + flag1)
 
-    loader = MedicalDataLoader(dead_file, alive_file)
+    loader = MedicalDataLoader(flag0_file, flag1_file)
     records = loader.load_and_process()
     loader.save_to_json(records, json_output)
     
@@ -241,8 +263,8 @@ def run_pipeline(
 def main():
     """실행"""
     run_pipeline(
-        dead_file=str(PROJECT_ROOT / 'data' / 'flag_1_textclean.csv'),
-        alive_file=str(PROJECT_ROOT / 'data' / 'flag_0_textclean.csv'),
+        flag0_file=str(PROJECT_ROOT / 'data' / 'df_flag0_final_processed.csv'),
+        flag1_file=str(PROJECT_ROOT / 'data' / 'df_flag1_final_processed.csv'),
         json_output=str(PROJECT_ROOT / 'data' / 'processed_data.json'),
         vector_db_output=str(PROJECT_ROOT / 'data' / 'vector_db'),
         batch_size=8,

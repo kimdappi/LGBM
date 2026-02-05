@@ -1,0 +1,124 @@
+"""Intervention Coverage Checker - 이미 시행된 치료 확인"""
+
+from typing import Dict, List
+
+
+def check_intervention_coverage(state: Dict) -> Dict:
+    """
+    구조화된 차트에서 이미 시행된 치료를 확인
+    - Diagnosis/Treatment Agent가 제안한 비판/해결책 중 중복 제거
+    - "치료 부재"류 비판을 "적절성 평가"로 전환
+    """
+    structured = state.get("structured_chart", {})
+    diagnosis_analysis = state.get("diagnosis_analysis", {})
+    treatment_analysis = state.get("treatment_analysis", {})
+    
+    print(f"  [Intervention Checker] Checking interventions from structured chart")
+    
+    # 1. 시행된 치료 목록 추출
+    interventions_given = structured.get("interventions_given", {})
+    
+    # 안전하게 medications 추출 (name이 없는 경우 대비)
+    medications_raw = interventions_given.get("medications", [])
+    medications_given = []
+    for m in medications_raw:
+        if isinstance(m, dict) and "name" in m:
+            medications_given.append(m["name"].lower())
+        elif isinstance(m, str):
+            medications_given.append(m.lower())
+    
+    # 안전하게 oxygen_therapy 추출 (type이 없는 경우 대비)
+    oxygen_raw = interventions_given.get("oxygen_therapy", [])
+    oxygen_given = []
+    for o in oxygen_raw:
+        if isinstance(o, dict) and "type" in o:
+            oxygen_given.append(o["type"])
+        elif isinstance(o, str):
+            oxygen_given.append(o)
+    
+    # 2. 주요 치료 카테고리 체크
+    coverage = {
+        "bronchodilator": any(
+            keyword in " ".join(medications_given) 
+            for keyword in ["albuterol", "duoneb", "bronchodilator", "beta-agonist"]
+        ),
+        "corticosteroid": any(
+            keyword in " ".join(medications_given)
+            for keyword in ["steroid", "prednisone", "methylprednisolone", "dexamethasone"]
+        ),
+        "antibiotic": any(
+            keyword in " ".join(medications_given)
+            for keyword in ["antibiotic", "ceftriaxone", "azithromycin", "levofloxacin", "cefepime"]
+        ),
+        "diuretic": any(
+            keyword in " ".join(medications_given)
+            for keyword in ["lasix", "furosemide", "diuretic"]
+        ),
+        "oxygen_support": len(oxygen_given) > 0,
+        "niv": any("niv" in o.lower() or "bipap" in o.lower() for o in oxygen_given),
+        "all_medications": medications_given,
+        "all_oxygen": oxygen_given
+    }
+    
+    # 3. 비판 필터링 규칙
+    filter_rules = {
+        "bronchodilator_missing": coverage["bronchodilator"],
+        "steroid_missing": coverage["corticosteroid"],
+        "antibiotic_missing": coverage["antibiotic"],
+        "oxygen_missing": coverage["oxygen_support"],
+        "niv_missing": coverage["niv"]
+    }
+    
+    # 4. 치료 분석에서 "부재"류 비판 제거
+    filtered_issues = []
+    
+    # 안전하게 issues 추출
+    medication_issues = treatment_analysis.get("medication_issues", [])
+    timing_issues = treatment_analysis.get("timing_issues", [])
+    
+    # None이 반환될 수 있으므로 리스트로 변환
+    if medication_issues is None:
+        medication_issues = []
+    if timing_issues is None:
+        timing_issues = []
+    
+    original_issues = list(medication_issues) + list(timing_issues)
+    
+    for issue in original_issues:
+        issue_lower = issue.lower()
+        
+        # "부재", "없음", "미시행", "not given" 등 키워드 체크
+        is_absence_claim = any(
+            keyword in issue_lower
+            for keyword in ["부재", "없음", "미시행", "not given", "not administered", "missing"]
+        )
+        
+        # 이미 시행된 치료에 대한 "부재" 비판인지 확인
+        already_given = False
+        if is_absence_claim:
+            if "bronchodilator" in issue_lower and coverage["bronchodilator"]:
+                already_given = True
+            elif "steroid" in issue_lower and coverage["corticosteroid"]:
+                already_given = True
+            elif "antibiotic" in issue_lower and coverage["antibiotic"]:
+                already_given = True
+            elif "oxygen" in issue_lower and coverage["oxygen_support"]:
+                already_given = True
+        
+        if not already_given:
+            filtered_issues.append(issue)
+        else:
+            print(f"  [Intervention Checker] 차단: '{issue}' (이미 시행됨)")
+    
+    result = {
+        "coverage": coverage,
+        "filter_rules": filter_rules,
+        "filtered_issues": filtered_issues,
+        "blocked_count": len(original_issues) - len(filtered_issues)
+    }
+    
+    print(f"  [Intervention Checker] 완료")
+    print(f"    - Performed treatments: {sum(1 for v in coverage.values() if isinstance(v, bool) and v)} categories")
+    print(f"    - Blocked critiques: {result['blocked_count']} items")
+    
+    return {"intervention_coverage": result}
