@@ -118,7 +118,7 @@ def analyze_clinical_context_with_llm(patient: Dict, structured_chart: Dict = No
         
         # Structured chart 정보 추가
         vitals_info = ""
-        if structured_chart and not structured_chart.get('fallback'):
+        if structured_chart:
             vitals = structured_chart.get('vitals', {})
             if vitals:
                 vitals_info = f"\n\nVital Signs:\n{json.dumps(vitals, indent=2)}"
@@ -789,7 +789,7 @@ def run_evidence_agent_2nd_pass(state: Dict) -> Dict:
     Diagnosis/Treatment Agent의 분석 결과를 바탕으로
     비판 내용에 맞는 타겟 검색 수행
     """
-    patient = state.get("structured_data", {})
+    patient = state.get("patient_case", {})
     existing_evidence = state.get("evidence", {})
     
     # 초기 이슈 수집 (Diagnosis + Treatment Agent 결과)
@@ -798,7 +798,7 @@ def run_evidence_agent_2nd_pass(state: Dict) -> Dict:
     diagnosis_analysis = state.get("diagnosis_analysis", {})
     if diagnosis_analysis:
         # Diagnosis Agent의 이슈
-        for issue in diagnosis_analysis.get("potential_issues", []):
+        for issue in diagnosis_analysis.get("issues", []):
             preliminary_issues.append({
                 "category": "diagnosis",
                 "issue": issue.get("issue", "") if isinstance(issue, dict) else str(issue),
@@ -814,12 +814,21 @@ def run_evidence_agent_2nd_pass(state: Dict) -> Dict:
     
     treatment_analysis = state.get("treatment_analysis", {})
     if treatment_analysis:
-        # Treatment Agent의 이슈
-        for issue in treatment_analysis.get("issues", []):
+        # 1) medication_issues
+        for issue in treatment_analysis.get("medication_issues", []) or []:
+            text = issue if isinstance(issue, str) else issue.get("issue", str(issue))
             preliminary_issues.append({
-                "category": "treatment",
-                "issue": issue.get("issue", "") if isinstance(issue, dict) else str(issue),
-                "severity": issue.get("severity", "medium") if isinstance(issue, dict) else "medium"
+                "category": "treatment_medication",
+                "issue": text,
+                "severity": "medium"
+            })
+        # 2) timing_issues
+        for issue in treatment_analysis.get("timing_issues", []) or []:
+            text = issue if isinstance(issue, str) else issue.get("issue", str(issue))
+            preliminary_issues.append({
+                "category": "treatment_timing",
+                "issue": text,
+                "severity": "medium"
             })
     
     # 이슈가 없으면 2차 검색 스킵

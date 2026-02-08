@@ -101,14 +101,14 @@ def format_evidence(evidence: Dict) -> str:
             status = r.get("status", "unknown")
             lines.append(f"  - [유사도: {score:.2f}] [{status}] {r.get('content', '')[:200]}...")
     
-    # 외부 근거 (CRAG로 보강된 경우)
+    # 외부 근거 (retrieval_mode에 따라 CRAG 보강 여부 표시)
     external = evidence.get("external", {})
     if external.get("results"):
-        triggered = "CRAG 보강" if external.get("triggered") else "추가 검색"
+        retrieval_mode = evidence.get("retrieval_mode", "")
+        triggered = "CRAG 보강" if retrieval_mode == "hybrid" else "추가 검색"
         lines.append(f"\n[PubMed ({triggered}, {external.get('count', 0)}건)]")
         for r in external["results"][:3]:
             lines.append(f"  - [PMID: {r.get('pmid', '')}] {r.get('title', '')}")
-    
     return "\n".join(lines) if lines else "근거 없음"
 
 

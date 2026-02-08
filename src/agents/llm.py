@@ -14,8 +14,8 @@ class LLMWrapper:
             api_key: OpenAI API 키 (없으면 환경변수에서 가져옴)
             model: 사용할 모델명 (없으면 환경변수에서 가져옴)
         """
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.model = os.getenv("LLM_MODEL", "gpt-4o")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.model = model or os.getenv("LLM_MODEL", "gpt-4o")
         self.client = OpenAI(api_key=self.api_key)
     
     def gpt4o(
@@ -66,43 +66,7 @@ class LLMWrapper:
         except Exception as e:
             raise RuntimeError(f"LLM API call failed: {e}")
     
-    def chat(
-        self,
-        messages: list,
-        temperature: float = 0.0,
-        max_tokens: int = 4000,
-        json_mode: bool = False,
-        timeout: int = 60
-    ) -> str:
-        """
-        채팅 완성 API 호출
-        
-        Args:
-            messages: 메시지 리스트 [{"role": "user", "content": "..."}]
-            temperature: 온도
-            max_tokens: 최대 토큰 수
-            json_mode: JSON 모드 활성화 여부
-            timeout: 타임아웃 (초)
-        
-        Returns:
-            str: 모델 응답
-        """
-        response_format = {"type": "json_object"} if json_mode else {"type": "text"}
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format=response_format,
-                timeout=timeout
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            raise RuntimeError(f"LLM API call failed: {e}")
+    
 
 
 # 싱글톤 인스턴스

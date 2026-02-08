@@ -198,7 +198,3 @@ class MedicalCritiqueGraph:
             "memory": final_state.get("memory", [])
         }
 
-
-def create_critique_graph(rag_retriever=None) -> MedicalCritiqueGraph:
-    """Critique Graph 생성"""
-    return MedicalCritiqueGraph(rag_retriever=rag_retriever)
