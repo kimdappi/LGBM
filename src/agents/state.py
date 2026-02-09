@@ -24,4 +24,5 @@ class AgentState(TypedDict):
     
     # 메타
     iteration: int
+    confidence: Optional[float]  # Critic 신뢰도 (반복 종료 조건용)
     memory: Annotated[List[str], add]  # Reflexion memory

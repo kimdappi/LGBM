@@ -4,12 +4,15 @@ from typing import Dict, Any
 from langgraph.graph import StateGraph, END
 
 from .state import AgentState
-from .chart_structurer import run_chart_structurer
-from .diagnosis_agent import run_diagnosis_agent
-from .treatment_agent import run_treatment_agent
-from .evidence_agent import run_evidence_agent, run_evidence_agent_2nd_pass
-from .intervention_checker import check_intervention_coverage
-from .critic_agent import run_critic_agent
+from .nodes import (
+    run_chart_structurer,
+    run_diagnosis_agent,
+    run_treatment_agent,
+    run_evidence_agent,
+    run_evidence_agent_2nd_pass,
+    check_intervention_coverage,
+    run_critic_agent,
+)
 
 #이게 전체 Orchestrator 처럼 사용 (전체를 감싸고 있는 구조)
 class MedicalCritiqueGraph:
@@ -130,17 +133,15 @@ class MedicalCritiqueGraph:
         return {
             "critique": result["critique"],
             "solutions": result["solutions"],
-            "iteration": state.get("iteration", 0) + 1
+            "iteration": state.get("iteration", 0) + 1,
+            "confidence": result.get("confidence", 0.5),
         }
     
     def _reflect_node(self, state: AgentState) -> Dict:
+        """Reflexion: critical 이슈만 메모리에 저장 후 재시도"""
         critique = state.get("critique", [])
-        
-
-        reflection = f"Iteration {state.get('iteration', 0)}: "
-        issues = [c.get("issue", "") for c in critique if c.get("severity") == "high"]
-        reflection += f"High severity issues: {issues}"
-        
+        issues = [c.get("issue", "") for c in critique if c.get("severity") == "critical"]
+        reflection = f"Iteration {state.get('iteration', 0)}: Critical issues: {issues}"
         return {"memory": [reflection]}
     
   #조건분기

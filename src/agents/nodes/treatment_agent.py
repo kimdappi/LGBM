@@ -1,7 +1,7 @@
 """Treatment Agent - 치료 적절성 분석"""
 
 from typing import Dict, List
-from .llm import get_llm
+from ..llm import get_llm
 
 SYSTEM_PROMPT = """당신은 중환자실 치료 전문의입니다. 시행된 치료를 확인한 뒤 치료/처치의 적절성(선택·용량·타이밍)과 disposition을 근거 기반으로 평가하세요."""
 

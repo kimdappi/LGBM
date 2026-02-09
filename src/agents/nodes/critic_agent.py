@@ -1,7 +1,7 @@
 """Critic Agent - 최종 검증 및 종합 (GPT-4o)"""
 
 from typing import Dict, List
-from .llm import get_llm
+from ..llm import get_llm
 
 SYSTEM_PROMPT = """당신은 의료 품질 관리 전문가입니다. 입력된 분석/근거만 바탕으로 최종 critique와 실행 가능한 구체적 해결책을 JSON으로 산출하세요."""
 

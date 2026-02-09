@@ -1,4 +1,12 @@
-"""Evidence Agent - CRAG (Corrective RAG) 방식 - GPT-4o 기반 개선 버전"""
+"""Evidence Agent - CRAG + 2-Pass 타겟 검색.
+
+구성:
+  1. PubMed / 내부 RAG 검색
+  2. LLM 임상 분석 및 쿼리 생성
+  3. 품질 평가 및 LLM 검증
+  4. Evidence Agent 1차 (CRAG)
+  5. Evidence Agent 2차 (비판 기반 타겟 검색)
+"""
 
 from Bio import Entrez
 from typing import Dict, List
@@ -13,6 +21,10 @@ Entrez.email = os.getenv("PUBMED_EMAIL", "researcher@example.com")
 # CRAG 임계치
 SIMILARITY_THRESHOLD = 0.7
 
+
+# ---------------------------------------------------------------------------
+# 1. PubMed / 내부 RAG 검색
+# ---------------------------------------------------------------------------
 
 def search_pubmed(query: str, max_results: int = 5, use_mesh: bool = True) -> List[Dict]:
     """
@@ -85,6 +97,10 @@ def search_internal_rag(query: str, rag_retriever, top_k: int = 3) -> List[Dict]
         print(f"Internal RAG search error: {e}")
         return []
 
+
+# ---------------------------------------------------------------------------
+# 2. LLM 임상 분석 및 쿼리 생성
+# ---------------------------------------------------------------------------
 
 def analyze_clinical_context_with_llm(patient: Dict, structured_chart: Dict = None) -> Dict:
     """
@@ -333,6 +349,10 @@ Generate the query. Return ONLY the query string, no explanations."""
         return default_query
 
 
+# ---------------------------------------------------------------------------
+# 3. 품질 평가 및 LLM 검증
+# ---------------------------------------------------------------------------
+
 def evaluate_internal_quality(internal_results: List[Dict], threshold: float = SIMILARITY_THRESHOLD) -> Dict:
     """
     내부 근거 품질 평가 (필터링 후)
@@ -577,6 +597,10 @@ Be GENEROUS with is_valid=true if the outcome/complication pattern matches."""
         }
 
 
+# ---------------------------------------------------------------------------
+# 4. Evidence Agent 1차 (CRAG: 유사 케이스 + PubMed)
+# ---------------------------------------------------------------------------
+
 def run_evidence_agent(
     state: Dict,
     rag_retriever=None,
@@ -710,8 +734,9 @@ def run_evidence_agent(
     return {"evidence": evidence}
 
 
-
-# 2차 검색: 비판 기반 타겟 검색 (2-Pass CRAG)
+# ---------------------------------------------------------------------------
+# 5. Evidence Agent 2차 (비판 기반 타겟 검색)
+# ---------------------------------------------------------------------------
 
 def generate_critique_based_query(patient: Dict, preliminary_issues: List[Dict]) -> str:
     """
