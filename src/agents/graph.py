@@ -189,7 +189,6 @@ class MedicalCritiqueGraph:
         
         return {
             "patient_id": patient_case.get("patient_id") or patient_case.get("id"),
-            "similar_cases": similar_cases or [],  # top-k=3 유사 케이스
             "critique": final_state.get("critique", []),
             "solutions": final_state.get("solutions", []),
             "diagnosis_analysis": final_state.get("diagnosis_analysis"),

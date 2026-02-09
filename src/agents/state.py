@@ -19,7 +19,7 @@ class AgentState(TypedDict):
     intervention_coverage: Optional[Dict]  # 이미 시행된 치료 확인
     
     # 최종 출력
-    critique: Optional[Dict]
+    critique: Optional[List[Dict]]  # Critic의 critique_points 리스트
     solutions: Optional[List[Dict]]
     
     # 메타

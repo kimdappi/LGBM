@@ -167,10 +167,6 @@ def run_chart_structurer(state: Dict) -> Dict:
         structured = json.loads(response_clean)
         
         print("  [Chart Structurer] [OK] Structured successfully")
-        vitals = structured.get('vitals', {})
-        interventions = structured.get('interventions_given', {})
-        outcome = structured.get('outcome', {})
-        
         return {"structured_chart": structured}
         
     except json.JSONDecodeError as e:

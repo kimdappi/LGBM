@@ -60,29 +60,29 @@ def check_intervention_coverage(state: Dict) -> Dict:
         "all_oxygen": oxygen_given
     }
     
-    # 3. 비판 필터링 규칙
-    filter_rules = {
-        "bronchodilator_missing": coverage["bronchodilator"],
-        "steroid_missing": coverage["corticosteroid"],
-        "antibiotic_missing": coverage["antibiotic"],
-        "oxygen_missing": coverage["oxygen_support"],
-        "niv_missing": coverage["niv"]
-    }
-    
-    # 4. 치료 분석에서 "부재"류 비판 제거
+    # 3. 비판 풀 구성: Diagnosis + Treatment 에이전트 이슈 (docstring: "Diagnosis/Treatment Agent가 제안한 비판 중 중복 제거")
     filtered_issues = []
     
-    # 안전하게 issues 추출
-    medication_issues = treatment_analysis.get("medication_issues", [])
-    timing_issues = treatment_analysis.get("timing_issues", [])
+    medication_issues = treatment_analysis.get("medication_issues", []) or []
+    timing_issues = treatment_analysis.get("timing_issues", []) or []
+    diagnosis_issues_raw = diagnosis_analysis.get("issues", []) or []
     
-    # None이 반환될 수 있으므로 리스트로 변환
-    if medication_issues is None:
-        medication_issues = []
-    if timing_issues is None:
-        timing_issues = []
+    # Treatment: 문자열 리스트
+    treatment_issue_texts = []
+    for x in medication_issues + timing_issues:
+        treatment_issue_texts.append(x if isinstance(x, str) else (x.get("issue", "") if isinstance(x, dict) else str(x)))
     
-    original_issues = list(medication_issues) + list(timing_issues)
+    # Diagnosis: issues[] 항목에서 issue 텍스트만 추출
+    diagnosis_issue_texts = []
+    for item in diagnosis_issues_raw:
+        if isinstance(item, dict):
+            diagnosis_issue_texts.append(item.get("issue", "") or "")
+        elif isinstance(item, str):
+            diagnosis_issue_texts.append(item)
+        else:
+            diagnosis_issue_texts.append(str(item))
+    
+    original_issues = [t for t in treatment_issue_texts + diagnosis_issue_texts if t and t.strip()]
     
     for issue in original_issues:
         issue_lower = issue.lower()
@@ -112,7 +112,6 @@ def check_intervention_coverage(state: Dict) -> Dict:
     
     result = {
         "coverage": coverage,
-        "filter_rules": filter_rules,
         "filtered_issues": filtered_issues,
         "blocked_count": len(original_issues) - len(filtered_issues)
     }
