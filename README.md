@@ -616,12 +616,16 @@ pip install -r requirements.txt
 OPENAI_API_KEY=your-openai-api-key-here
 LLM_MODEL=gpt-4o
 PUBMED_EMAIL=your-email@example.com
+
+# Critic Agent (선택)
+# CARE_CRITIC_ROUTER_LLM=1  # 설정 시 도구 선택에 LLM 라우터 사용 (미설정 시 휴리스틱 라우터)
 ```
 
 **환경변수 설명:**
 - `OPENAI_API_KEY`: OpenAI API 키 (필수)
 - `LLM_MODEL`: 사용할 LLM 모델명 (기본: `gpt-4o`, 다른 모델로 변경 가능)
 - `PUBMED_EMAIL`: PubMed API 사용을 위한 이메일 (필수)
+- `CARE_CRITIC_ROUTER_LLM`: `1`로 설정 시 Critic 도구 선택에 LLM 라우터 사용 (기본: 휴리스틱 라우터, LGBM과 동일)
 
 ### 3. 데이터 준비
 

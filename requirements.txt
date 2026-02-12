@@ -15,8 +15,9 @@ faiss-cpu>=1.7.4
 transformers>=4.30.0
 torch>=2.0.0
 
-# LLM 및 Multi-Agent
+# LLM 및 Multi-Agent (Critic Agent는 src/llm/openai_chat.py + requests 사용)
 openai>=2.16.0
+requests>=2.31.0
 langgraph>=1.0.0
 langchain-core>=1.2.0
 

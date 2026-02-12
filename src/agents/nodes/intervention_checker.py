@@ -9,9 +9,9 @@ def check_intervention_coverage(state: Dict) -> Dict:
     - Diagnosis/Treatment Agent가 제안한 비판/해결책 중 중복 제거
     - "치료 부재"류 비판을 "적절성 평가"로 전환
     """
-    structured = state.get("structured_chart", {})
-    diagnosis_analysis = state.get("diagnosis_analysis", {})
-    treatment_analysis = state.get("treatment_analysis", {})
+    structured = state.get("structured_chart") or {}
+    diagnosis_analysis = state.get("diagnosis_analysis") or {}
+    treatment_analysis = state.get("treatment_analysis") or {}
     
     print(f"  [Intervention Checker] Checking interventions from structured chart")
     
