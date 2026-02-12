@@ -13,9 +13,9 @@ class AgentConfig:
 
     max_tools: int = 8
     feedback_rounds: int = 2
-    router_llm_model: str = \"gpt-4o-mini\"
-    critique_model: str = \"gpt-4o-mini\"
-    feedback_model: str = \"gpt-4o-mini\"
+    router_llm_model: str = "gpt-4o-mini"
+    critique_model: str = "gpt-4o-mini"
+    feedback_model: str = "gpt-4o-mini"
 
 
 @dataclass
