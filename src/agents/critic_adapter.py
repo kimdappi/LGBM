@@ -91,10 +91,11 @@ def normalize_solutions(solutions: List[Any]) -> List[Dict[str, Any]]:
             })
         elif isinstance(s, dict):
             action = s.get("action") or s.get("solution", "")
+            target_issue = s.get("target_issue") or s.get("issue", "")
             citation = s.get("citation") or s.get("evidence", "N/A")
             priority = s.get("priority", "medium")
             if action:
-                out.append({"action": action, "citation": citation, "priority": priority})
+                out.append({"action": action, "target_issue": target_issue, "citation": citation, "priority": priority})
     return out
 
 

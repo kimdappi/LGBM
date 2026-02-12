@@ -14,6 +14,7 @@ load_dotenv()
 
 from src.agents import MedicalCritiqueGraph
 from src.retrieval.rag_retriever import RAGRetriever
+from src.memory import EpisodicMemoryStore
 
 
 def load_patient_case(path: str) -> dict:
@@ -156,13 +157,24 @@ def main():
     print("Multi-Agent Medical Critique System (LLM-Enhanced)")
     print("=" * 60)
     
-    # 1. RAG Retriever 로드
-    print("\n[1/5] Loading RAG retriever...")
+    # 1. RAG Retriever + Episodic Memory 로드
+    print("\n[1/5] Loading RAG retriever + Episodic Memory...")
     try:
         rag = RAGRetriever(db_path="vector_db")
     except Exception as e:
         print(f"  Warning: RAG not loaded ({e})")
         rag = None
+    
+    # Episodic Memory (RAG의 임베딩 모델 공유 → 중복 로딩 방지)
+    episodic = None
+    try:
+        shared_embedder = rag.vector_db if rag and hasattr(rag, 'vector_db') else None
+        episodic = EpisodicMemoryStore(shared_embedder=shared_embedder)
+        episodic.load()
+        print(f"  [EpisodicMemory] {episodic.episode_count}건의 과거 경험 로드됨")
+    except Exception as e:
+        print(f"  Warning: Episodic Memory not loaded ({e})")
+        episodic = None
     
     # 2. 환자 케이스 로드 (data/patient.json)
     print("\n[2/5] Loading patient case...")
@@ -199,15 +211,7 @@ def main():
         
     except Exception as e:
         print(f"  Error loading patient.json: {e}")
-        print("  Using test case instead...")
-        patient_case = {
-            "patient_id": "TEST-001",
-            "diagnosis": "Sepsis",
-            "diagnosis_confidence": "low",
-            "clinical_text": "Test case",
-            "outcome": "unknown"
-        }
-    
+
     # 3. Top-K 유사 케이스 검색 (근거용) + 품질 검증
     print("\n[3/5] Retrieving similar cases (top_k=3)...")
     similar_cases = []
@@ -239,7 +243,7 @@ def main():
     
     # 4. 그래프 생성 및 실행
     print("\n[4/5] Running agent graph...")
-    graph = MedicalCritiqueGraph(rag_retriever=rag, max_iterations=3)
+    graph = MedicalCritiqueGraph(rag_retriever=rag, episodic_store=episodic)
     
     result = graph.run(
         patient_case=patient_case,
@@ -310,7 +314,11 @@ def main():
         print(f"  {i}. [{priority}] {action}")
         print(f"     Citation: {citation}")
     
-    print(f"\n[ITERATIONS]: {result.get('iterations', 1)}")
+    # 에피소딕 메모리 활용 여부
+    if result.get("episodic_lessons_used"):
+        print(f"\n[EPISODIC MEMORY]: 과거 유사 경험 참조됨 ✓")
+    else:
+        print(f"\n[EPISODIC MEMORY]: 과거 유사 경험 없음 (이번 분석이 메모리에 저장됨)")
     
     # 저장
     save_report(result)

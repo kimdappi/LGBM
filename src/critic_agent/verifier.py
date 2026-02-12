@@ -91,7 +91,7 @@ Recommendations:
 - Admission: {c.get("admission_type")} / {c.get("admission_location")}
 - Outcome: {outcome}
 - Clinical Note:
-{(c.get("text") or "")[:800]}
+{(c.get("text") or "")}
 """
 
         return f"""

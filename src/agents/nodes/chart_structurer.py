@@ -61,6 +61,15 @@ STRUCTURING_PROMPT = """
         "chest_xray": "소견 (infiltrate, cardiomegaly, clear 등)",
         "ct_chest": "소견"
     }},
+    "procedures_performed": [
+        {{
+            "name": "시술명 (Paracentesis, Central Line, Thoracentesis, Chest Tube, LP, Intubation 등)",
+            "technique": "시술 기법 (ultrasound-guided / blind / landmark-based / sterile / not documented)",
+            "timing": "시점",
+            "complications": "합병증 (bleeding, pneumothorax, infection, organ injury 등, 없으면 null)",
+            "safety_flags": ["발견된 안전 문제 (예: 'blind technique', 'no sterile documented', 'puncture site bleeding')"]
+        }}
+    ],
     "interventions_given": {{
         "medications": [
             {{"name": "약물명", "timing": "시점/시간", "route": "경로"}}
@@ -100,6 +109,13 @@ CRITICAL (Expired):
 - 사망이면 `outcome.status="expired"`로 설정
 - `discharge_condition`, `discharge_location`은 차트 원문 그대로
 - `cause_of_death`와 `critical_events_leading_to_outcome`(타임라인)을 최우선 추출
+- `cause_of_death`에 iatrogenic(의인성) 원인이면 반드시 명시 (예: "Iatrogenic hemoperitoneum from paracentesis")
+
+CRITICAL (Procedures):
+- 모든 시술(paracentesis, central line, thoracentesis, chest tube, LP, intubation)을 `procedures_performed`에 기록
+- technique 필드: "ultrasound-guided", "US-guided", "sterile" 등 수식어가 있으면 기록. 없으면 "not documented"
+- "blind", "blindly", "without guidance" 표현이 있으면 technique에 "blind"로 기록하고 safety_flags에 추가
+- 시술 후 합병증(bleeding, puncture site bleeding, pneumothorax 등)이 있으면 complications에 기록
 """
 
 

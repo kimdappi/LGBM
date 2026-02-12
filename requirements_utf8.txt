@@ -1,0 +1,51 @@
+﻿# CARE-CRITIC Multi-Agent ?⑦궎吏 ?섏〈??
+
+# ?곗씠??泥섎━
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+
+# ?꾨쿋??諛?踰≫꽣 DB
+sentence-transformers>=2.2.0
+FlagEmbedding>=1.2.0  # Instruction-tuned Reranker (bge-reranker-v2-m3)
+faiss-cpu>=1.7.4
+# faiss-gpu>=1.7.4  # GPU ?ъ슜 ??
+
+# NLP 諛??띿뒪??泥섎━
+transformers>=4.30.0
+torch>=2.0.0
+
+# LLM 諛?Multi-Agent
+openai>=2.16.0
+langgraph>=1.0.0
+langchain-core>=1.2.0
+
+# ?몃? 洹쇨굅 寃??
+biopython>=1.86  # PubMed API
+
+# ?ㅼ젙 ?뚯씪
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# ?좏떥由ы떚
+tqdm>=4.65.0
+python-dateutil>=2.8.0
+
+# 媛쒕컻 諛??뚯뒪??
+pytest>=7.3.0
+black>=23.0.0
+flake8>=6.0.0
+
+# 由ы룷???앹꽦
+jinja2>=3.1.0
+markdown>=3.4.0
+
+# ?꾨줎?몄뿏?? ???꾨젅?꾩썙??援ъ텞
+fastapi==0.115.0
+uvicorn==0.30.6
+python-multipart==0.0.9
+pydantic==2.8.2
+
+streamlit==1.37.1
+requests==2.32.3
+python-multipart

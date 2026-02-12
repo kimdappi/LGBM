@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +13,58 @@ def _as_json(x: Any) -> Any:
     if isinstance(x, (dict, list, str, int, float, bool)) or x is None:
         return x
     return str(x)
+
+
+# ──────────────────────────────────────────────
+# Severity Hierarchy 재정렬 (CritiqueBuilder 후처리)
+# ──────────────────────────────────────────────
+
+_IATROGENIC_PATTERNS = [
+    r"iatrogenic", r"hemoperitoneum", r"organ.?injur",
+    r"procedur.{0,20}complication", r"procedur.{0,20}bleed",
+    r"puncture.{0,10}bleed", r"blind(?:ly)?\s+(?:paracentesis|thoracentesis|procedure)",
+    r"without.{0,15}(?:ultrasound|guidance)", r"perforation",
+]
+
+_DEATH_ALIGNMENT_PATTERNS = [
+    r"cause.{0,10}death", r"death.{0,10}cause",
+    r"admission.{0,20}(?:differ|mismatch|vs).{0,20}(?:death|expir)",
+    r"last.{0,5}24.{0,5}hour", r"terminal.{0,10}event",
+    r"hct.{0,5}drop", r"hemodynamic.{0,10}instabilit",
+]
+
+
+def _rerank_critique_points(pts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Severity Hierarchy에 따라 critique_points를 재정렬.
+    
+    Priority 0: Iatrogenic trauma / procedural complications → 자동 severity=high
+    Priority 1: Cause of death alignment issues
+    Priority 2: Other high severity
+    Priority 3: Medium
+    Priority 4: Low
+    """
+    severity_order = {"high": 0, "critical": 0, "medium": 1, "low": 2}
+    
+    def sort_key(pt: Dict[str, Any]):
+        text = (str(pt.get("point", "")) + str(pt.get("cohort_comparison", ""))).lower()
+        
+        # Priority 0: Iatrogenic
+        is_iatrogenic = any(re.search(p, text) for p in _IATROGENIC_PATTERNS)
+        if is_iatrogenic:
+            pt["severity"] = "high"
+            return (0, 0)
+        
+        # Priority 1: Death alignment
+        is_death = any(re.search(p, text) for p in _DEATH_ALIGNMENT_PATTERNS)
+        if is_death:
+            return (1, severity_order.get(pt.get("severity", "low"), 2))
+        
+        # Normal severity ordering
+        sev = severity_order.get(pt.get("severity", "low"), 2)
+        return (2 + sev, sev)
+    
+    return sorted(pts, key=sort_key)
 
 
 @dataclass
@@ -78,7 +131,7 @@ class CritiqueBuilder:
         return {
             "patient_id": state.patient.get("id"),
             "analysis": "LLM 미사용(키 없음)으로 요약 기반 비판을 생성했습니다. (Top-K 비교 결과가 있으면 cohort_comparison에 반영)",
-            "critique_points": pts,
+            "critique_points": _rerank_critique_points(pts),
             "risk_factors": [],
             "recommendations": [],
             "agent_mode": True,
@@ -137,16 +190,33 @@ Rules:
 - If the record is insufficient, explicitly say so and prefer cautious language.
 - If behavior_topk_direct_compare exists, use it to fill cohort_comparison with concrete differences.
 - If previous_critique is provided, keep good parts and fix only what is requested.
+
+★ CRITICAL SEVERITY HIERARCHY (MUST follow this order):
+1. **Iatrogenic Trauma / Procedural Complications** = HIGHEST PRIORITY (severity: high)
+   - If any procedure (paracentesis, central line, thoracentesis, etc.) caused bleeding, organ injury, hemoperitoneum, or perforation → this MUST be the #1 critique point
+   - "Blind" or undocumented technique in high-risk procedures → severity: high
+   - Procedural complications leading to death outweigh ALL other issues
+2. **Cause of Death Alignment**
+   - If admission reason differs from cause of death, explicitly identify the actual death pathway
+   - Weight the last 24 hours' events (Hct drop, hemodynamic instability, procedure complications) heavily
+3. **Medication Errors** (e.g., benzos in HE, NSAIDs in CKD) = important but LOWER priority than iatrogenic trauma
+4. **Other diagnostic/process issues** = lowest priority
+
+Do NOT let medication errors overshadow iatrogenic procedural complications in the ranking.
 """
 
         cfg = OpenAIChatConfig(model=self.model, temperature=0.2, max_tokens=1600)
         content = call_openai_chat_completions(messages=[{"role": "user", "content": prompt}], config=cfg)
         obj = safe_json_loads(content) or {}
 
+        # Severity Hierarchy 후처리: rerank critique_points
+        critique_pts = obj.get("critique_points", [])
+        critique_pts = _rerank_critique_points(critique_pts)
+
         out: JsonDict = {
             "patient_id": state.patient.get("id"),
             "analysis": obj.get("analysis", content),
-            "critique_points": obj.get("critique_points", []),
+            "critique_points": critique_pts,
             "risk_factors": obj.get("risk_factors", []),
             "recommendations": obj.get("recommendations", []),
             "agent_mode": True,

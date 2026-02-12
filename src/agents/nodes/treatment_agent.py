@@ -19,11 +19,17 @@ ANALYSIS_PROMPT = """
 근거(요약):
 {evidence_summary}
 
+과거 유사 케이스 분석 경험:
+{episodic_lessons}
+
 요청:
 1) 치료/처치 적절성: 선택·용량·타이밍·가이드라인 준수. **시행된 치료를 "없었다"라고 쓰지 말고** 적절성/개선점으로 평가.
 2) Disposition 평가:
    - 환자 expired면: 조기퇴원/입원권고 금지. 대신 치료 과정의 문제(합병증/지연/부적절 약물/모니터링 실패) 중심으로 분석하고 `is_appropriate`는 N/A로 표기.
    - 생존 케이스에서 고위험(저산소/지속 빈맥·빈호흡/치명적 감별 미배제/진단 불명확) 조기퇴원은 부적절로 평가.
+3) 과거 유사 케이스 교훈이 있으면 반드시 참고:
+   - 과거 경험의 약물/치료 관련 이슈가 이 케이스에도 해당되는지 확인
+   - 해당되면 분석에 반영 (예: 과거 유사 케이스에서 벤조 투여 위험이 있었다면, 이 케이스에서도 확인)
 
 출력은 JSON만:
 {{
@@ -143,13 +149,17 @@ def run_treatment_agent(state: Dict) -> Dict:
     discharge_location = patient.get("discharge_location", "Unknown")
     disposition = f"{disposition_status} ({discharge_location})"
     
+    # 에피소딕 메모리 교훈 (과거 유사 케이스 경험)
+    episodic_lessons = state.get("episodic_lessons", "") or "없음"
+    
     prompt = ANALYSIS_PROMPT.format(
         diagnosis=patient.get("diagnosis", "Unknown"),
         disposition=disposition,
         vitals_summary=vitals_summary,
         clinical_course=clinical_course,
         interventions_given=interventions_given,
-        evidence_summary=evidence_summary
+        evidence_summary=evidence_summary,
+        episodic_lessons=episodic_lessons,
     )
     
     try:

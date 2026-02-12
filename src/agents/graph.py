@@ -1,7 +1,7 @@
 """LangGraph 기반 Medical Critique Multi-Agent System"""
 
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from langgraph.graph import StateGraph, END
 
 from .state import AgentState
@@ -22,20 +22,22 @@ from .nodes import (
 from src.critic_agent.critic_graph import get_critic_graph
 from src.critic_agent.verifier import Verifier
 
-#이게 전체 Orchestrator 처럼 사용 (전체를 감싸고 있는 구조)
+
 class MedicalCritiqueGraph:
     """
     Multi-Agent Critique 시스템 (2-Pass CRAG + LGBM-style Critic Agent)
 
-        Orchestrator (Reflexion Memory)
+        Orchestrator (Episodic Memory)
               │
+        ┌─ 에피소딕 메모리 검색 (과거 유사 케이스 교훈)
+        │
         Chart Structurer (IE)
               │
         Evidence 1st (CRAG: 유사케이스 + 일반검색)
               │
         ┌─────┴─────┐
         ↓           ↓
-    Diagnosis  Treatment
+    Diagnosis  Treatment      ← episodic_lessons 주입
      (GPT-4o)  (GPT-4o)
         └─────┬─────┘
               ↓
@@ -65,16 +67,14 @@ class MedicalCritiqueGraph:
         → graph state에 critique / solutions 반영
     ─────────────────────────────────────────────────────────────────
               ↓
-        reflect (조건부: iteration < max, confidence ≤ 0.8 일 때만)
+             END
               │
-        ┌─────┴──────────┐
-        ↓                ↓
-       END             재실행: Critic만 (reflect → critic)
+        └─ 에피소딕 메모리에 저장 (critique, solutions, 교훈)
     """
     
-    def __init__(self, rag_retriever=None, max_iterations: int = 2):
+    def __init__(self, rag_retriever=None, episodic_store=None):
         self.rag_retriever = rag_retriever
-        self.max_iterations = max_iterations
+        self.episodic_store = episodic_store
         self.graph = self._build_graph()
     
     def _build_graph(self) -> StateGraph:
@@ -82,7 +82,7 @@ class MedicalCritiqueGraph:
         LangGraph 구성 (2-Pass CRAG):
         
         chart_structurer → evidence_1st → diagnosis/treatment (병렬) 
-        → evidence_2nd (비판 기반) → intervention_checker → critic → reflect (조건부)
+        → evidence_2nd (비판 기반) → intervention_checker → critic → END
         """
         
         # 그래프 생성
@@ -93,10 +93,9 @@ class MedicalCritiqueGraph:
         graph.add_node("evidence", self._evidence_node)
         graph.add_node("diagnosis", self._diagnosis_node)
         graph.add_node("treatment", self._treatment_node)
-        graph.add_node("evidence_2nd", self._evidence_2nd_node)  # NEW: 2차 검색
+        graph.add_node("evidence_2nd", self._evidence_2nd_node)
         graph.add_node("intervention_checker", self._intervention_checker_node)
         graph.add_node("critic", self._critic_node)
-        graph.add_node("reflect", self._reflect_node)
         
         # 엣지 정의
         graph.set_entry_point("chart_structurer")
@@ -118,22 +117,14 @@ class MedicalCritiqueGraph:
         # intervention_checker → critic
         graph.add_edge("intervention_checker", "critic")
         
-        # critic → 조건부 분기 (반복 or 종료)
-        graph.add_conditional_edges(
-            "critic",
-            self._should_continue,
-            {
-                "reflect": "reflect",
-                "end": END
-            }
-        )
-        
-        # reflect → critic (Critic만 재실행)
-        graph.add_edge("reflect", "critic")
+        # critic → END
+        graph.add_edge("critic", END)
         
         return graph.compile()
     
-#노드 함수
+    # ──────────────────────────────────────────────
+    # 노드 함수
+    # ──────────────────────────────────────────────
     
     def _chart_structurer_node(self, state: AgentState) -> Dict:
         """Chart Structurer: 차트 구조화 (Information Extraction)"""
@@ -161,7 +152,7 @@ class MedicalCritiqueGraph:
         return check_intervention_coverage(state)
     
     def _critic_node(self, state: AgentState) -> Dict:
-        """Critic Agent: LangGraph 서브그래프(preprocess → router → run_tools → critique_builder → feedback 조건 반복) → graph state 반영"""
+        """Critic Agent: LangGraph 서브그래프 → graph state 반영"""
         critic_state = clean_state_to_agent_state(state)
         initial_critic_dict = {
             "patient": critic_state.patient,
@@ -185,7 +176,7 @@ class MedicalCritiqueGraph:
         critic_state = dict_to_critic_agent_state(result_state)
         updates = agent_state_to_clean_updates(critic_state, critique_result)
 
-        # Phase 4: 유사 케이스가 있으면 Verifier로 solutions 보강 (유사 케이스 근거)
+        # Verifier: 유사 케이스가 있으면 solutions 보강
         similar_cases = state.get("similar_cases") or []
         if similar_cases and os.environ.get("OPENAI_API_KEY"):
             try:
@@ -204,7 +195,7 @@ class MedicalCritiqueGraph:
             except Exception:
                 pass  # 유지: recommendations 기반 solutions
 
-        # Phase 6: 리포트 호환 — point→issue, severity high→critical, category 기본값
+        # 리포트 호환 — point→issue, severity high→critical, category 기본값
         critique_list = updates.get("critique", [])
         normalized = []
         for c in critique_list:
@@ -219,34 +210,58 @@ class MedicalCritiqueGraph:
             normalized.append(c)
         updates["critique"] = normalized
 
-        # confidence: 마지막 feedback의 ok 여부
+        # confidence
         last_feedback = [t for t in critic_state.trace if t.get("tool") == "feedback"]
         confidence = 0.8 if (last_feedback and last_feedback[-1].get("detail", {}).get("ok")) else 0.5
-        updates["iteration"] = state.get("iteration", 0) + 1
+        updates["iteration"] = 1
         updates["confidence"] = confidence
         return updates
     
-    def _reflect_node(self, state: AgentState) -> Dict:
-        """Reflexion: critical 이슈만 메모리에 저장 후 재시도"""
-        critique = state.get("critique", [])
-        issues = [c.get("issue", "") for c in critique if c.get("severity") == "critical"]
-        reflection = f"Iteration {state.get('iteration', 0)}: Critical issues: {issues}"
-        return {"memory": [reflection]}
+    # ──────────────────────────────────────────────
+    # 에피소딕 메모리
+    # ──────────────────────────────────────────────
     
-  #조건분기
-    
-    def _should_continue(self, state: AgentState) -> str:
-        """반복 여부 결정"""
-        iteration = state.get("iteration", 0)
-        confidence = state.get("confidence", 0.5)
+    def _search_episodic_memory(self, patient_case: Dict) -> str:
+        """과거 유사 케이스의 분석 경험을 검색하여 프롬프트 문자열 반환"""
+        if self.episodic_store is None:
+            return ""
         
-        # 최대 반복 도달 또는 충분한 confidence
-        if iteration >= self.max_iterations or confidence > 0.8:
-            return "end"
+        try:
+            clinical_text = patient_case.get("clinical_text", "") or patient_case.get("text", "")
+            episodes = self.episodic_store.search_similar_episodes(
+                clinical_text=clinical_text,
+                top_k=2,
+                min_similarity=0.3,
+                diagnosis=patient_case.get("diagnosis", ""),
+                secondary_diagnoses=patient_case.get("secondary_diagnoses", []),
+            )
+            if episodes:
+                return self.episodic_store.format_for_prompt(episodes, max_episodes=2)
+        except Exception as e:
+            print(f"  [EpisodicMemory] 검색 실패: {e}")
         
-        return "reflect"
+        return ""
     
- # 실행함수
+    def _save_episodic_memory(self, patient_case: Dict, result: Dict):
+        """분석 결과를 에피소딕 메모리에 저장"""
+        if self.episodic_store is None:
+            return
+        
+        try:
+            self.episodic_store.add_episode(
+                patient_case=patient_case,
+                critique_points=result.get("critique", []),
+                solutions=result.get("solutions", []),
+                confidence=result.get("confidence", 0.5),
+                diagnosis_analysis=result.get("diagnosis_analysis"),
+                treatment_analysis=result.get("treatment_analysis"),
+            )
+        except Exception as e:
+            print(f"  [EpisodicMemory] 저장 실패: {e}")
+    
+    # ──────────────────────────────────────────────
+    # 실행 함수
+    # ──────────────────────────────────────────────
     
     def run(self, patient_case: Dict, similar_cases: list = None) -> Dict:
         """
@@ -259,9 +274,18 @@ class MedicalCritiqueGraph:
         Returns:
             최종 critique 및 solutions
         """
+        # Phase 0: 에피소딕 메모리 검색 (과거 유사 케이스 교훈)
+        episodic_lessons = self._search_episodic_memory(patient_case)
+        
+        if episodic_lessons:
+            print(f"\n[Episodic Memory] 과거 유사 경험 발견 → 각 노드 프롬프트에 주입")
+        else:
+            print(f"\n[Episodic Memory] 과거 유사 경험 없음 (첫 실행 또는 유사도 부족)")
+        
         initial_state = {
             "patient_case": patient_case,
             "similar_cases": similar_cases or [],
+            "episodic_lessons": episodic_lessons,
             "structured_chart": None,
             "diagnosis_analysis": None,
             "treatment_analysis": None,
@@ -277,20 +301,23 @@ class MedicalCritiqueGraph:
             "solutions": None,
             "iteration": 0,
             "confidence": None,
-            "memory": [],
         }
         
         # 그래프 실행
         final_state = self.graph.invoke(initial_state)
         
-        return {
+        result = {
             "patient_id": patient_case.get("patient_id") or patient_case.get("id"),
             "critique": final_state.get("critique", []),
             "solutions": final_state.get("solutions", []),
             "diagnosis_analysis": final_state.get("diagnosis_analysis"),
             "treatment_analysis": final_state.get("treatment_analysis"),
             "evidence": final_state.get("evidence"),
-            "iterations": final_state.get("iteration", 1),
-            "memory": final_state.get("memory", [])
+            "confidence": final_state.get("confidence", 0.5),
+            "episodic_lessons_used": bool(episodic_lessons),
         }
-
+        
+        # Phase Final: 에피소딕 메모리에 이번 분석 경험 저장
+        self._save_episodic_memory(patient_case, result)
+        
+        return result
