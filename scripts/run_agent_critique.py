@@ -152,15 +152,18 @@ Text:
         }
 
 
-def main():
-    print("=" * 60)
-    print("Multi-Agent Medical Critique System (LLM-Enhanced)")
-    print("=" * 60)
+def run_agent_critique_pipeline( #main에 있던 코드를 함수로 묶
+    patient_data: dict,
+    db_path: str = "vector_db",
+    top_k: int = 3,
+    similarity_threshold: float = 0.7,
+    max_iterations: int = 3,
+    ) -> dict:
     
     # 1. RAG Retriever + Episodic Memory 로드
     print("\n[1/5] Loading RAG retriever + Episodic Memory...")
     try:
-        rag = RAGRetriever(db_path="data/vector_db")
+        rag = RAGRetriever(db_path=db_path)
     except Exception as e:
         print(f"  Warning: RAG not loaded ({e})")
         rag = None
@@ -176,43 +179,36 @@ def main():
         print(f"  Warning: Episodic Memory not loaded ({e})")
         episodic = None
     
-    # 2. 환자 케이스 로드 (data/patient.json)
-    print("\n[2/5] Loading patient case...")
-    try:
-        patient_data = load_patient_case("data/patient.json")
-        
-        # LLM 기반 진단 추출
-        clinical_text = patient_data.get("text", "")
-        print(f"  Clinical text length: {len(clinical_text)} chars")
-        print(f"  Extracting diagnosis with LLM...")
-        
-        diagnosis_result = extract_diagnosis_from_text(clinical_text)
-        
-        patient_case = {
-            "patient_id": patient_data.get("id"),
-            "diagnosis": diagnosis_result["diagnosis"],
-            "secondary_diagnoses": diagnosis_result.get("secondary_diagnoses", []),
-            "key_conditions": diagnosis_result.get("key_conditions", []),
-            "diagnosis_confidence": diagnosis_result["confidence"],
-            "diagnosis_reasoning": diagnosis_result["reasoning"],
-            "clinical_text": clinical_text,
-            "outcome": patient_data.get("status"),
-            "age": patient_data.get("age"),
-            "sex": patient_data.get("sex")
-        }
-        
-        print(f"  Patient ID: {patient_case['patient_id']}")
-        print(f"  Primary Diagnosis: {diagnosis_result['diagnosis']}")
-        print(f"  Secondary Diagnoses: {diagnosis_result.get('secondary_diagnoses', [])}")
-        print(f"  Key Conditions: {diagnosis_result.get('key_conditions', [])}")
-        print(f"  Confidence: {diagnosis_result['confidence']}")
-        print(f"  Reasoning: {diagnosis_result['reasoning']}")
-        print(f"  Outcome: {patient_case['outcome']}")
-        
-    except Exception as e:
-        print(f"  Error loading patient.json: {e}")
-        print("  data/patient.json을 준비한 뒤 다시 실행하세요.")
-        sys.exit(1)
+
+    # LLM 기반 진단 추출
+    clinical_text = patient_data.get("text", "")
+    print(f"  Clinical text length: {len(clinical_text)} chars")
+    print(f"  Extracting diagnosis with LLM...")
+    
+    diagnosis_result = extract_diagnosis_from_text(clinical_text)
+    
+    patient_case = {
+        "patient_id": patient_data.get("id"),
+        "diagnosis": diagnosis_result["diagnosis"],
+        "secondary_diagnoses": diagnosis_result.get("secondary_diagnoses", []),
+        "key_conditions": diagnosis_result.get("key_conditions", []),
+        "diagnosis_confidence": diagnosis_result["confidence"],
+        "diagnosis_reasoning": diagnosis_result["reasoning"],
+        "clinical_text": clinical_text,
+        "outcome": patient_data.get("status"),
+        "age": patient_data.get("age"),
+        "sex": patient_data.get("sex")
+    }
+    
+    print(f"  Patient ID: {patient_case['patient_id']}")
+    print(f"  Primary Diagnosis: {diagnosis_result['diagnosis']}")
+    print(f"  Secondary Diagnoses: {diagnosis_result.get('secondary_diagnoses', [])}")
+    print(f"  Key Conditions: {diagnosis_result.get('key_conditions', [])}")
+    print(f"  Confidence: {diagnosis_result['confidence']}")
+    print(f"  Reasoning: {diagnosis_result['reasoning']}")
+    print(f"  Outcome: {patient_case['outcome']}")
+    
+
 
     # 3. Top-K 유사 케이스 검색 (근거용) + 품질 검증
     print("\n[3/5] Retrieving similar cases (top_k=3)...")
@@ -228,14 +224,14 @@ def main():
                 similarity = case.get("similarity", 0)
                 if similarity >= 0.7:
                     valid_cases.append(case)
-                    print(f"  ✓ Case {case.get('id')}: similarity={similarity:.3f} [VALID]")
+                    print(f"  OKAY Case {case.get('id')}: similarity={similarity:.3f} [VALID]")
                 else:
-                    print(f"  ✗ Case {case.get('id')}: similarity={similarity:.3f} [REJECTED - below 0.7]")
+                    print(f"  BAD Case {case.get('id')}: similarity={similarity:.3f} [REJECTED - below 0.7]")
             
             similar_cases = valid_cases
             
             if len(valid_cases) == 0:
-                print(f"  ⚠ No valid similar cases (all below 0.7 threshold)")
+                print(f"  (Warning!!!) No valid similar cases (all below 0.7 threshold)")
                 print(f"  → CRAG will use external PubMed only")
             else:
                 print(f"  Found {len(valid_cases)} valid similar cases")
@@ -318,16 +314,33 @@ def main():
     
     # 에피소딕 메모리 활용 여부
     if result.get("episodic_lessons_used"):
-        print(f"\n[EPISODIC MEMORY]: 과거 유사 경험 참조됨 ✓")
+        print(f"\n[EPISODIC MEMORY]: 과거 유사 경험 참조됨 ")
     else:
         print(f"\n[EPISODIC MEMORY]: 과거 유사 경험 없음 (이번 분석이 메모리에 저장됨)")
     
+    return result
+
+## execute.py 말고 cli로  python scripts/run_agent_critique.py 실행 가능
+def main():
+    print("=" * 60)
+    print("Multi-Agent Medical Critique System (LLM-Enhanced)")
+    print("=" * 60)
+
+    # 기존 동작 유지: data/patient.json을 불러서 단독 실행
+    patient_data = load_patient_case("data/patient.json")
+
+    result = run_agent_critique_pipeline(
+        patient_data=patient_data,
+        db_path="vector_db",
+        top_k=3,
+        similarity_threshold=0.7,
+        max_iterations=3,
+    )
     # 저장
     save_report(result)
-    
+
     print("\n" + "=" * 60)
     print("Done!")
-
 
 if __name__ == "__main__":
     main()
