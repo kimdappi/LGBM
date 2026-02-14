@@ -2,7 +2,7 @@
 
 import json
 from typing import Dict
-from ..llm import get_llm
+from .llm import get_llm
 
 # LLM 인스턴스
 llm = get_llm()

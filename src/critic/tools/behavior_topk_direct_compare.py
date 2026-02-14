@@ -48,10 +48,20 @@ class BehaviorTopKDirectCompareTool(Tool):
         evidence = state.preprocessing.get("evidence") or {}
         evidence_spans = (evidence.get("evidence_spans") or {}) if isinstance(evidence, dict) else {}
         if not similar_cases:
-            return {"comparisons": [], "summary": "similar_cases가 없어 비교를 수행하지 않았습니다."}
-        if os.environ.get("OPENAI_API_KEY", ""):
-            return self._run_llm(state=state, similar_cases=similar_cases, evidence_spans=evidence_spans)
-        return self._run_heuristic(similar_cases=similar_cases, evidence_spans=evidence_spans)
+            out = {"comparisons": [], "summary": "similar_cases가 없어 비교를 수행하지 않았습니다."}
+        elif os.environ.get("OPENAI_API_KEY", ""):
+            out = self._run_llm(state=state, similar_cases=similar_cases, evidence_spans=evidence_spans)
+        else:
+            out = self._run_heuristic(similar_cases=similar_cases, evidence_spans=evidence_spans)
+        cohort = getattr(state, "cohort_data", None)
+        if isinstance(cohort, dict):
+            if cohort.get("diagnosis_analysis") is not None:
+                out["reference_diagnosis_analysis"] = cohort.get("diagnosis_analysis")
+            if cohort.get("treatment_analysis") is not None:
+                out["reference_treatment_analysis"] = cohort.get("treatment_analysis")
+            if cohort.get("evidence") is not None:
+                out["reference_evidence"] = cohort.get("evidence")
+        return out
 
     def _run_heuristic(self, *, similar_cases: List[Dict[str, Any]], evidence_spans: Dict[str, Dict[str, Any]]) -> JsonDict:
         patient_terms = []
@@ -68,8 +78,17 @@ class BehaviorTopKDirectCompareTool(Tool):
     def _run_llm(self, *, state: AgentState, similar_cases: List[Dict[str, Any]], evidence_spans: Dict[str, Dict[str, Any]]) -> JsonDict:
         cases_block = [{"rank": i, "case_id": c.get("id"), "similarity": c.get("similarity"), "status": c.get("status"), "age": c.get("age"), "sex": c.get("sex"), "text": str(c.get("text", "") or "")[:2500]} for i, c in enumerate(similar_cases[:3], 1)]
         payload = {"patient": {"id": state.patient.get("id"), "age": state.patient.get("age"), "sex": state.patient.get("sex"), "text": str(state.patient.get("text", "") or "")[:2500]}, "patient_evidence_spans": evidence_spans, "similar_cases": cases_block}
+        cohort = getattr(state, "cohort_data", None)
+        if isinstance(cohort, dict):
+            if cohort.get("diagnosis_analysis") is not None:
+                payload["reference_only_prior_diagnosis_analysis"] = cohort.get("diagnosis_analysis")
+            if cohort.get("treatment_analysis") is not None:
+                payload["reference_only_prior_treatment_analysis"] = cohort.get("treatment_analysis")
+            if cohort.get("evidence") is not None:
+                payload["reference_only_prior_evidence"] = cohort.get("evidence")
         prompt = f"""You are a contrastive comparator for clinical process review. Compare the patient to each similar case (problems, workup, therapies, monitoring/response).
 Input JSON: {payload}
+If reference_only_prior_* keys are present, use them only as reference; do not depend on them. Base comparison on patient_evidence_spans and similar_cases.
 Return JSON only: {{ "comparisons": [{{ "case_id":"...", "key_similarities":["..."], "key_differences":["..."], "evidence_links":[{{"span_id":"E1","why":"..."}}] }}], "summary": "1-3 sentences" }}
 Rules: evidence_links must use existing span_id or record_uncertainty."""
         cfg = OpenAIChatConfig(model="gpt-4o-mini", temperature=0.2, max_tokens=1200)

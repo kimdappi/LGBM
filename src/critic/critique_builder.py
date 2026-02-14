@@ -160,12 +160,26 @@ class CritiqueBuilder:
             "previous_critique": _as_json(previous_critique) if previous_critique else None,
             "patch_instructions": patch_instructions or "",
         }
+        cohort = getattr(state, "cohort_data", None)
+        if isinstance(cohort, dict):
+            ref = {}
+            if cohort.get("diagnosis_analysis") is not None:
+                ref["diagnosis_analysis"] = cohort.get("diagnosis_analysis")
+            if cohort.get("treatment_analysis") is not None:
+                ref["treatment_analysis"] = cohort.get("treatment_analysis")
+            if cohort.get("evidence") is not None:
+                ref["evidence"] = cohort.get("evidence")
+            if cohort.get("intervention_coverage") is not None:
+                ref["intervention_coverage"] = cohort.get("intervention_coverage")
+            if ref:
+                payload["reference_only_prior_results"] = ref
 
         mode_line = "Revise the previous critique using patch_instructions." if previous_critique else "Generate a critique report."
 
         prompt = f"""You are a critical medical process reviewer.
 {mode_line}
 Use ONLY the provided structured evidence. Do not invent unobserved facts.
+If "reference_only_prior_results" is present in Input JSON, use it only as reference; do not depend on it. Base your critique on preprocessing, lens_results, behavior_results.
 
 Input JSON:
 {payload}

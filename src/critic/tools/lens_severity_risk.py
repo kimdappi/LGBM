@@ -52,4 +52,7 @@ class LensSeverityRiskTool(Tool):
         missing_sev: List[str] = []
         if any("vitals_missing" in str(x) for x in missing):
             missing_sev.append("vitals_not_documented_in_text: 중증도 판단에 필요한 활력징후가 텍스트에서 충분히 확인되지 않음")
-        return {"severity_flags": flags, "missing_severity_assessment": missing_sev}
+        out: Dict = {"severity_flags": flags, "missing_severity_assessment": missing_sev}
+        if isinstance(getattr(state, "cohort_data", None), dict) and state.cohort_data.get("risk_factor_analysis"):
+            out["reference_risk_factor_analysis"] = state.cohort_data.get("risk_factor_analysis")
+        return out

@@ -4,7 +4,6 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List
 
-from .toolrag import ToolRAGIndex, retrieve_tool_cards
 from .types import AgentState, ToolCard, ToolSelection
 from ..llm.openai_chat import OpenAIChatConfig, call_openai_chat_completions, safe_json_loads
 
@@ -80,73 +79,49 @@ class HeuristicRouter:
 @dataclass
 class LLMRouter:
     """
-    Router v1: ToolRAG (retrieve tool cards) + LLM picks tools.
-    Enabled when CARE_CRITIC_ROUTER_LLM=1.
+    Router that uses LLM (agent-style): reads tool cards (documents) and current
+    context, then selects which agents/tools to run next. Fallback to HeuristicRouter
+    when OPENAI_API_KEY is not set.
     """
 
     model: str = "gpt-4o-mini"
-    top_cards: int = 6
 
-    def _enabled(self) -> bool:
-        return os.environ.get("CARE_CRITIC_ROUTER_LLM", "").strip() == "1"
+    def _llm_available(self) -> bool:
+        return bool(os.environ.get("OPENAI_API_KEY", "").strip())
 
     def select(
         self,
         state: AgentState,
         available_tools: List[str],
-        toolrag_index: ToolRAGIndex,
-        tool_cards_by_name: Dict[str, ToolCard],
+        tool_cards: List[ToolCard],
     ) -> ToolSelection:
-        if not self._enabled():
+        if not self._llm_available():
             return HeuristicRouter().select(state, available_tools)
 
         text = str(state.patient.get("text", "") or "")
-        pre = state.preprocessing or {}
+        card_text = "\n\n".join([c.to_text() for c in tool_cards]) if tool_cards else ""
 
-        query = "\n".join(
-            [
-                "Select the minimal set of tools to run for critical process review.",
-                f"text_len={len(text)}",
-                f"timeline_events={len((pre.get('timeline') or {}).get('events', [])) if isinstance(pre.get('timeline'), dict) else 0}",
-                f"evidence_spans={len((pre.get('evidence') or {}).get('evidence_spans', {})) if isinstance(pre.get('evidence'), dict) else 0}",
-                text[:2000],
-            ]
-        )
-
-        retrieved = retrieve_tool_cards(toolrag_index, query=query, top_n=self.top_cards)
-        card_text = "\n\n".join([c.to_text() for c, _ in retrieved])
-        retrieved_names = [c.name for c, _ in retrieved]
-
-        prompt = f"""You are a tool router for a clinical critique agent.
-You MUST select only from AVAILABLE_TOOLS.
-Select the MINIMAL set of tools needed (1~6 tools).
+        prompt = f"""You are a tool router for a clinical critique agent. Read the tool cards below and the patient context, then select the MINIMAL set of tools (1~6) whose triggers or description fit the case.
 
 AVAILABLE_TOOLS: {available_tools}
 
-Retrieved tool cards:
+Tool cards:
 {card_text}
 
-Patient (truncated):
+Patient context (truncated):
 {text[:2500]}
 
 Output JSON only:
-{{
-  "tools": ["tool_name", "..."],
-  "reason": "one short sentence"
-}}
+{{"tools": ["tool_name", "..."], "reason": "one short sentence"}}
 """
 
         cfg = OpenAIChatConfig(model=self.model, temperature=0.1, max_tokens=400)
         content = call_openai_chat_completions(messages=[{"role": "user", "content": prompt}], config=cfg)
         obj = safe_json_loads(content) or {}
         tools = obj.get("tools") if isinstance(obj.get("tools"), list) else []
-        tools = [t for t in tools if isinstance(t, str)]
-
-        # Strict filtering
-        tools = [t for t in tools if t in available_tools]
+        tools = [t for t in tools if isinstance(t, str) and t in available_tools]
         if not tools:
             return HeuristicRouter().select(state, available_tools)
-
         reason = str(obj.get("reason", "") or "")
-        return ToolSelection(tools=tools, reason=reason, retrieved_cards=retrieved_names)
+        return ToolSelection(tools=tools, reason=reason, retrieved_cards=tools)
 

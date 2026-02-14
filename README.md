@@ -203,7 +203,7 @@ CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**
 | **Treatment** | `nodes/treatment_agent.py` | 치료 적절성 + Disposition + episodic | **GPT-4o** |
 | **Evidence 2nd Pass** | `nodes/evidence_agent.py` | 비판 기반 타겟 PubMed 검색 | **GPT-4o-mini** + PubMed |
 | **Intervention Checker** | `nodes/intervention_checker.py` | 이미 시행된 치료 확인 | Rule-based |
-| **Critic Sub-graph** | `src/critic_agent/` | Preprocessing → Router → Tools → CritiqueBuilder → Feedback → Verifier | **GPT-4o** |
+| **Critic Sub-graph** | `src/critic/` | Preprocessing → Router → Tools → CritiqueBuilder → Verifier | **GPT-4o** |
 | **Episodic Memory** | `src/memory/episodic_store.py` | 과거 경험 저장/검색 (1+3 전략) | MedCPT + GPT-4o-mini |
 
 ### 2. 에피소딕 메모리 시스템 (Episodic Memory) — 1+3 전략
@@ -511,7 +511,7 @@ LGBM/
 │   │       ├── treatment_agent.py       # 치료 적절성 + Disposition + episodic
 │   │       └── intervention_checker.py  # 시행된 치료 확인 (Rule-based)
 │   │
-│   ├── critic_agent/                    # Critic Sub-graph (LangGraph 서브그래프)
+│   ├── critic/                           # Critic Sub-graph (LangGraph 서브그래프)
 │   │   ├── critic_graph.py              # 서브그래프 정의 (preprocess→router→tools→feedback)
 │   │   ├── critique_builder.py          # LLM 기반 비판점 생성
 │   │   ├── feedback.py                  # 비판 품질 피드백 + 반복 제어
@@ -576,7 +576,7 @@ LGBM/
 메인 그래프: 에피소딕 메모리 검색 → 6개 노드 → Critic Sub-graph → 에피소딕 메모리 저장
 
 ```python
-from src.agents import MedicalCritiqueGraph
+from src.pipeline import MedicalCritiqueGraph
 from src.memory import EpisodicMemoryStore
 
 # 에피소딕 메모리 (RAG 임베딩 모델 공유)
@@ -607,7 +607,7 @@ result = graph.run(
 [POST] Episodic Memory Save (LLM 요약 → MedCPT → FAISS)
 ```
 
-#### `src/critic_agent/` - Critic Sub-graph
+#### `src/critic/` - Critic Sub-graph
 
 독립적인 LangGraph 서브그래프로 구현된 비판 파이프라인:
 
@@ -785,7 +785,7 @@ python scripts/run_agent_critique.py
 ### Intervention Checker
 - 시행된 치료 확인 (Rule-based) → 허위 비판 차단
 
-### Critic Sub-graph (`src/critic_agent/`)
+### Critic Sub-graph (`src/critic/`)
 - LangGraph 서브그래프로 독립 실행
 - Preprocessing → LLM Router → Lens/Behavior 도구 → CritiqueBuilder → Feedback 루프
 - Verifier: 유사 케이스 기반 솔루션 검증

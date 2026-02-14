@@ -12,10 +12,8 @@ class AgentConfig:
     """Critic 에이전트 공통 설정 (LangGraph 서브그래프에서도 공유)."""
 
     max_tools: int = 8
-    feedback_rounds: int = 2
     router_llm_model: str = "gpt-4o-mini"
     critique_model: str = "gpt-4o-mini"
-    feedback_model: str = "gpt-4o-mini"
 
 
 @dataclass

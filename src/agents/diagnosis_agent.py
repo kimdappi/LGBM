@@ -8,7 +8,7 @@
 
 import re
 from typing import Dict, List, Optional
-from ..llm import get_llm
+from .llm import get_llm
 
 
 # ──────────────────────────────────────────────

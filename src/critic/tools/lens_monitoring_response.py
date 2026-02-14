@@ -46,8 +46,12 @@ class LensMonitoringResponseTool(Tool):
         evidence = state.preprocessing.get("evidence") or {}
         evidence_spans = (evidence.get("evidence_spans") or {}) if isinstance(evidence, dict) else {}
         if os.environ.get("OPENAI_API_KEY", ""):
-            return self._run_llm(events=events, evidence_spans=evidence_spans)
-        return self._run_heuristic(events=events, evidence_spans=evidence_spans)
+            out = self._run_llm(events=events, evidence_spans=evidence_spans, state=state)
+        else:
+            out = self._run_heuristic(events=events, evidence_spans=evidence_spans)
+        if isinstance(getattr(state, "cohort_data", None), dict) and state.cohort_data.get("process_contributor_analysis"):
+            out["reference_process_contributor_analysis"] = state.cohort_data.get("process_contributor_analysis")
+        return out
 
     def _run_heuristic(self, *, events: List[Dict], evidence_spans: Dict[str, Dict[str, Any]]) -> JsonDict:
         det = []
@@ -85,10 +89,13 @@ class LensMonitoringResponseTool(Tool):
                 })
         return {"deterioration_points": det[:10], "response_actions": resp[:12], "lags": lags, "note": "LLM 미사용(키 없음)으로 키워드 기반 추정입니다."}
 
-    def _run_llm(self, *, events: List[Dict], evidence_spans: Dict[str, Dict[str, Any]]) -> JsonDict:
+    def _run_llm(self, *, events: List[Dict], evidence_spans: Dict[str, Dict[str, Any]], state: AgentState = None) -> JsonDict:
         payload = {"timeline_events": events[:60], "evidence_spans": evidence_spans}
+        if state and isinstance(getattr(state, "cohort_data", None), dict) and state.cohort_data.get("process_contributor_analysis"):
+            payload["reference_only_prior_process_contributor_analysis"] = state.cohort_data.get("process_contributor_analysis")
         prompt = f"""You are a monitoring/response auditor. Identify deterioration points and whether appropriate response followed.
 Input JSON: {payload}
+If "reference_only_prior_process_contributor_analysis" is present, use it only as reference; do not depend on it.
 Return JSON only: {{ "deterioration_points": [{{"event_id":"T1","summary":"...","span_id":"E1"}}], "response_actions": [{{"event_id":"T2","summary":"...","span_id":"E2"}}], "lags": [{{"deterioration_event_id":"T1","response_event_id":"T2","lag_events":3,"span_id":"E1"}}] }}
 Rules: span_id must exist in evidence_spans or use record_uncertainty. Be conservative if documentation is unclear."""
         cfg = OpenAIChatConfig(model="gpt-4o-mini", temperature=0.2, max_tokens=900)

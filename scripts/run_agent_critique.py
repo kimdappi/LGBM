@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.agents import MedicalCritiqueGraph
+from src.pipeline import MedicalCritiqueGraph
 from src.retrieval.rag_retriever import RAGRetriever
 from src.memory import EpisodicMemoryStore
 
@@ -160,7 +160,7 @@ def main():
     # 1. RAG Retriever + Episodic Memory 로드
     print("\n[1/5] Loading RAG retriever + Episodic Memory...")
     try:
-        rag = RAGRetriever(db_path="vector_db")
+        rag = RAGRetriever(db_path="data/vector_db")
     except Exception as e:
         print(f"  Warning: RAG not loaded ({e})")
         rag = None
@@ -211,6 +211,8 @@ def main():
         
     except Exception as e:
         print(f"  Error loading patient.json: {e}")
+        print("  data/patient.json을 준비한 뒤 다시 실행하세요.")
+        sys.exit(1)
 
     # 3. Top-K 유사 케이스 검색 (근거용) + 품질 검증
     print("\n[3/5] Retrieving similar cases (top_k=3)...")
