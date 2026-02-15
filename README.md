@@ -8,7 +8,7 @@
 
 CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**를 모델로 한 AI 시스템입니다. 
 
-환자 데이터를 입력받아 **차트 구조화(IE) + 임상 패턴 감지 + 2-Pass CRAG(Corrective RAG) + Intervention Checker + Critic Sub-graph(Router→Tools→Feedback) + Episodic Memory(1+3)**를 통해, 마치 여러 명의 전문의가 모여 케이스를 리뷰하듯이 비판적 검토 포인트 및 해결책을 제시합니다.
+환자 데이터를 입력받아 **차트 구조화(IE) + LLM 임상 분석 + 2-Pass CRAG(Corrective RAG: 내부 RAG + PubMed) + Agent Router + Conditional Agents + Intervention Checker + Critic Sub-graph(Router→Tools→CritiqueBuilder→Verifier) + Episodic Memory(1+3)**를 통해, 마치 여러 명의 전문의가 모여 케이스를 리뷰하듯이 비판적 검토 포인트 및 해결책을 제시합니다.
 
 > **"한 명의 의사가 아닌, 전체 의료팀이 함께 검토하는 AI"**
 > **"과거 유사 케이스에서 학습하여 점점 나아지는 AI"**
@@ -34,12 +34,14 @@ CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**
   - 싱글톤 패턴으로 메모리 효율적
   - JSON 모드 및 timeout 설정 지원
 - **2-Pass CRAG (Corrective RAG)**: 
-  - **1차 검색**: 유사 케이스 + 일반 PubMed 검색 (진단/치료 분석 전)
-  - **2차 검색**: 비판 내용 기반 타겟 검색 (진단/치료 분석 후)
-  - 내부 유사도 >= 0.7 and >= 1개 → LLM 검증
-  - LLM 검증 통과 → 내부 + 외부 모두 사용 (하이브리드)
-  - LLM 검증 실패 or 내부 없음 → 외부(PubMed)만 사용
-  - 비판에 맞는 정확한 근거 확보
+  - **1차 검색 (분석 전)**: LLM 임상 맥락 분석 → CRAG (내부 RAG + PubMed)
+    - 내부 유사도 >= 0.7 and >= 1개 → LLM 검증 → 하이브리드 or 외부만
+    - `clinical_analysis` + `evidence_summary` (abstract 포함) → Diagnosis/Treatment Agent에 주입
+  - **2차 검색 (분석 후)**: 비판점 기반 CRAG (내부 RAG + PubMed 타겟 검색)
+    - Diagnosis/Treatment의 이슈 수집 → 비판 특화 쿼리 생성
+    - 기존 evidence에 병합 (중복 PMID/case_id 제거)
+  - **근거 활용 가드레일**: 문헌은 환자 상황에 적용 가능한 경우에만 인용, 환자 차트 데이터가 항상 우선
+  - **전체 시스템 반영**: CritiqueBuilder (`literature_evidence`) + Verifier (solutions 생성) 모두 근거 활용
 
 ## 프로젝트 배경: M&M 컨퍼런스 구조 모방
 
@@ -81,18 +83,20 @@ CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**
 | M&M 단계 | 시스템 컴포넌트 | 역할 |
 |----------|----------------|------|
 | **케이스 정리** | Chart Structurer | 발표 전공의처럼 차트를 구조화 |
-| **문헌 리뷰** | Evidence Agent | 최신 가이드라인 자동 검색 |
-| **진단 질의** | Diagnosis Agent | "감별진단은?" "Wells score는?" |
-| **치료 질의** | Treatment Agent | "퇴원 결정은 적절했나?" "다른 치료는?" |
+| **문헌 리뷰** | Evidence Agent (2-Pass CRAG) | LLM 임상 분석 + 내부 RAG + PubMed (1차: 일반, 2차: 비판 기반) |
+| **진단 질의** | Diagnosis Agent | "감별진단은?" "Wells score는?" + clinical_analysis + 문헌 근거 |
+| **치료 질의** | Treatment Agent | "퇴원 결정은 적절했나?" + clinical_analysis + 문헌 근거 |
 | **현장 증언** | Intervention Checker | "이미 시행된 치료" 확인 |
-| **종합 평가** | Critic Sub-graph | Router → Tools → CritiqueBuilder → Feedback → Verifier |
+| **케이스 분류** | Agent Router + Conditional Agents | 위험 인자/프로세스 기여 분석 (조건부 실행) |
+| **종합 평가** | Critic Sub-graph | Router → Tools → CritiqueBuilder (+ 문헌 근거) → Verifier (+ 문헌 근거) |
+| **대안 제시** | Alternative Explanation Agent | 대안적 설명 생성 |
 | **경험 축적** | Episodic Memory (1+3) | 진단 필터 + LLM 요약 임베딩으로 교훈 축적 + 자동 회상 |
 
 ## 시스템 아키텍처
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│                     LangGraph Orchestrator (graph.py)                  │
+│                   LangGraph Orchestrator (pipeline/graph.py)           │
 │                       + Episodic Memory (1+3)                         │
 ├───────────────────────────────────────────────────────────────────────┤
 │                                                                        │
@@ -102,40 +106,51 @@ CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**
 │  [0] Chart Structurer ────────────────────────────────────────────── │
 │     원문 → 구조화 JSON (Vitals, 증상, Red flags, 치료, 경과)          │
 │                              ↓                                         │
-│  [1] Evidence 1st Pass ──────────────────────────────────────────── │
-│     임상 패턴 감지 → CRAG (내부 RAG + PubMed)                        │
+│  [1] Evidence 1st Pass (CRAG) ──────────────────────────────────── │
+│     LLM 임상 맥락 분석 → CRAG (내부 RAG + PubMed)                   │
+│     → clinical_analysis + evidence_summary (abstract 포함)            │
 │                              │                                         │
 │               ┌──────────────┴──────────────┐                         │
 │               ↓                              ↓                         │
-│  [2] Diagnosis Agent              [3] Treatment Agent                  │
-│     진단 적절성 + episodic        치료 적절성 + Disposition            │
+│  [2a] Diagnosis Agent            [2b] Treatment Agent                  │
+│     진단 적절성 + episodic          치료 적절성 + Disposition           │
+│     + clinical_analysis             + clinical_analysis                │
+│     + 문헌 근거 (가드레일)          + 문헌 근거 (가드레일)             │
 │               │                              │                         │
 │               └──────────────┬───────────────┘                         │
 │                              ↓                                         │
-│  [4] Evidence 2nd Pass ──────────────────────────────────────────── │
-│     비판점 기반 PubMed 타겟 검색                                      │
+│  [3] Evidence 2nd Pass (CRAG) ──────────────────────────────────── │
+│     비판점 수집 → 내부 RAG + PubMed 타겟 검색                        │
+│     → 기존 evidence에 병합 (중복 PMID/case_id 제거)                  │
 │                              ↓                                         │
-│  [5] Intervention Checker ───────────────────────────────────────── │
+│  [4] Intervention Checker ───────────────────────────────────────── │
 │     시행된 치료 확인 → 허위 비판 차단                                  │
 │                              ↓                                         │
+│  [5] Agent Router ───────────────────────────────────────────────── │
+│     케이스 특성 분석 → 조건부 에이전트 선택                            │
+│                              ↓                                         │
+│  [6] Conditional Agents ─────────────────────────────────────────── │
+│     Risk Factor / Process Contributor (선택적 실행)                    │
+│                              ↓                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │  [6] Critic Sub-graph (critic_graph.py)                         │  │
+│  │  [7] Critic Sub-graph (critic/critic_graph.py)                  │  │
 │  │  ┌───────────────────────────────────────────────────────────┐  │  │
-│  │  │ Preprocessing (timeline, evidence, record_gaps)           │  │  │
+│  │  │ Preprocessing (timeline, evidence_spans, record_gaps)     │  │  │
 │  │  │        ↓                                                   │  │  │
 │  │  │ Router (LLM) → Lens/Behavior 도구 선택                   │  │  │
 │  │  │        ↓                                                   │  │  │
 │  │  │ Tool 실행 (예산 내)                                       │  │  │
 │  │  │        ↓                                                   │  │  │
 │  │  │ CritiqueBuilder (LLM) → critique_points                  │  │  │
+│  │  │   + literature_evidence (환자 적합 시만 인용)             │  │  │
 │  │  │        ↓                                                   │  │  │
-│  │  │ Feedback (품질 판단)                                      │  │  │
-│  │  │    ├─ OK → 종료                                           │  │  │
-│  │  │    └─ 불충분 → 추가 도구 실행 → 재빌드 (feedback loop)   │  │  │
-│  │  │        ↓                                                   │  │  │
-│  │  │ (선택) Verifier → solutions (유사 케이스 근거)            │  │  │
+│  │  │ Verifier → solutions (유사 케이스 + 문헌 근거)            │  │  │
+│  │  │   + PMID 인용 (관련성 있을 때만)                          │  │  │
 │  │  └───────────────────────────────────────────────────────────┘  │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
+│                              ↓                                         │
+│  [8] Alternative Explanation Agent ──────────────────────────────── │
+│     대안적 설명 생성                                                   │
 │                              ↓                                         │
 │                           [END]                                        │
 │                              ↓                                         │
@@ -150,43 +165,51 @@ CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                       2-Pass CRAG Strategy                       │
+│              2-Pass CRAG Strategy + Evidence Flow                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  [1차 검색: 분석 전]                                            │
+│  [1차 검색: 분석 전 — CRAG]                                     │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ 환자 데이터 → 임상 패턴 감지 → 일반 쿼리 생성           │    │
+│  │ 환자 데이터 → LLM 임상 맥락 분석 (clinical_analysis)    │    │
 │  │      ↓                                                   │    │
-│  │ 내부 RAG (유사 케이스) + PubMed (일반 가이드라인)        │    │
+│  │ 내부 RAG (유사 케이스, 유사도 ≥ 0.7)                    │    │
+│  │      ↓ (LLM 검증: M&M에 유용한가?)                      │    │
+│  │ 통과 → 하이브리드 / 실패 → 외부만                       │    │
 │  │      ↓                                                   │    │
-│  │ Diagnosis/Treatment Agent가 근거로 활용                  │    │
+│  │ PubMed 검색 (LLM 생성 쿼리, abstract 포함)              │    │
+│  │      ↓                                                   │    │
+│  │ [공유 함수: format_evidence_summary]                     │    │
+│  │  → clinical_analysis + evidence (abstract 포함)          │    │
+│  │  → Diagnosis/Treatment Agent 프롬프트에 주입             │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                              ↓                                   │
-│  [분석 단계]                                                    │
+│  [분석 단계 — 가드레일 적용]                                    │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ Diagnosis Agent: "PE 진단 지연 가능성"                   │    │
-│  │ Treatment Agent: "항응고제 누락"                         │    │
+│  │ Diagnosis Agent: 문헌은 환자에 적용 가능할 때만 인용     │    │
+│  │ Treatment Agent: 환자 차트 데이터가 항상 문헌보다 우선   │    │
 │  │      ↓                                                   │    │
 │  │ 비판점(issues) 도출                                      │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                              ↓                                   │
-│  [2차 검색: 분석 후] 🆕                                         │
+│  [2차 검색: 분석 후 — CRAG]                                     │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ 비판점 수집 → 타겟 쿼리 생성                            │    │
-│  │ 예: "pulmonary embolism missed diagnosis pneumonia       │    │
-│  │      D-dimer diagnostic delay"                           │    │
+│  │ 비판점 수집 (diagnosis issues + missed + medication      │    │
+│  │             + timing) → Critical 우선 정렬               │    │
 │  │      ↓                                                   │    │
-│  │ PubMed 검색 (비판 내용에 맞는 문헌)                      │    │
+│  │ LLM 비판 기반 타겟 쿼리 생성                             │    │
 │  │      ↓                                                   │    │
-│  │ 기존 evidence에 병합 (중복 PMID 제거)                    │    │
+│  │ CRAG 1단계: 내부 RAG (비판 기반 쿼리, 유사도 ≥ 0.7)    │    │
+│  │ CRAG 2단계: PubMed (비판 특화 검색, max 5)              │    │
+│  │      ↓                                                   │    │
+│  │ 기존 evidence에 병합 (중복 PMID/case_id 제거)           │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                              ↓                                   │
-│  [Critic Agent]                                                  │
+│  [Critic + Verifier — 문헌 근거 적극 활용]                      │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │ 1차 검색: 유사 케이스 + 일반 가이드라인                  │    │
-│  │ 2차 검색: 비판 내용에 맞는 타겟 문헌                     │    │
-│  │      ↓                                                   │    │
-│  │ 근거 있는 비판 + 정확한 해결책 생성                      │    │
+│  │ CritiqueBuilder: literature_evidence로 비판점 강화       │    │
+│  │   (환자에 직접 관련될 때만 인용, PMID 명시)              │    │
+│  │ Verifier: 유사 케이스 + 문헌 근거로 solutions 생성      │    │
+│  │   (관련 없는 문헌은 인용하지 않음)                       │    │
 │  └─────────────────────────────────────────────────────────┘    │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -197,13 +220,16 @@ CARE-CRITIC은 **실제 의료팀의 M&M(Morbidity and Mortality) 컨퍼런스**
 ### 1. Multi-Agent 협력 구조 (2-Pass CRAG + Critic Sub-graph)
 | Agent | 위치 | 역할 | 모델 |
 |-------|------|------|------|
-| **Chart Structurer** | `nodes/chart_structurer.py` | 차트 정보 구조화 (IE) | **GPT-4o** |
-| **Evidence 1st Pass** | `nodes/evidence_agent.py` | 유사 케이스 + 일반 PubMed 검색 | **GPT-4o** + RAG + PubMed |
-| **Diagnosis** | `nodes/diagnosis_agent.py` | 진단 적절성 분석 + episodic | **GPT-4o** |
-| **Treatment** | `nodes/treatment_agent.py` | 치료 적절성 + Disposition + episodic | **GPT-4o** |
-| **Evidence 2nd Pass** | `nodes/evidence_agent.py` | 비판 기반 타겟 PubMed 검색 | **GPT-4o-mini** + PubMed |
-| **Intervention Checker** | `nodes/intervention_checker.py` | 이미 시행된 치료 확인 | Rule-based |
-| **Critic Sub-graph** | `src/critic/` | Preprocessing → Router → Tools → CritiqueBuilder → Verifier | **GPT-4o** |
+| **Chart Structurer** | `src/agents/chart_structurer.py` | 차트 정보 구조화 (IE) | **GPT-4o** |
+| **Evidence 1st Pass** | `src/agents/evidence_agent.py` | LLM 임상 분석 + CRAG (내부 RAG + PubMed) | **GPT-4o** + RAG + PubMed |
+| **Diagnosis** | `src/agents/diagnosis_agent.py` | 진단 적절성 + clinical_analysis + 문헌 근거 + episodic | **GPT-4o** |
+| **Treatment** | `src/agents/treatment_agent.py` | 치료 적절성 + Disposition + clinical_analysis + 문헌 근거 + episodic | **GPT-4o** |
+| **Evidence 2nd Pass** | `src/agents/evidence_agent.py` | 비판 기반 CRAG (내부 RAG + PubMed 타겟 검색) | **GPT-4o-mini** + RAG + PubMed |
+| **Intervention Checker** | `src/agents/intervention_checker.py` | 이미 시행된 치료 확인 | Rule-based |
+| **Agent Router** | `src/agents/agent_router.py` | 케이스 특성 분석 → 조건부 에이전트 선택 | Rule/LLM |
+| **Conditional Agents** | `src/agents/run_conditional_agents.py` | 위험 인자 / 프로세스 기여 분석 (선택적) | **GPT-4o** |
+| **Critic Sub-graph** | `src/critic/` | Preprocess → Router → Tools → CritiqueBuilder (+ 문헌) → Verifier (+ 문헌) | **GPT-4o-mini** |
+| **Alternative Explanation** | `src/agents/alternative_explanation_agent.py` | 대안적 설명 생성 | **GPT-4o** |
 | **Episodic Memory** | `src/memory/episodic_store.py` | 과거 경험 저장/검색 (1+3 전략) | MedCPT + GPT-4o-mini |
 
 ### 2. 에피소딕 메모리 시스템 (Episodic Memory) — 1+3 전략
@@ -387,21 +413,23 @@ graph TD
     B -->|실패| B2[기본 구조 반환]
     B -->|성공| C[Structured Chart]
     B2 --> C
-    C --> D[Evidence Agent 1st Pass]
-    D --> E[임상 패턴 감지 + CRAG]
-    E --> F[내부 RAG + PubMed]
-    F --> G1[Diagnosis Agent + episodic]
-    F --> G2[Treatment Agent + episodic]
-    G1 --> H[비판점 도출]
-    G2 --> H
-    H --> I[Evidence 2nd Pass]
-    I --> I2[비판 기반 타겟 검색]
+    C --> D[Evidence 1st Pass CRAG]
+    D --> D1[LLM 임상 분석 + 내부 RAG + PubMed]
+    D1 -->|clinical_analysis + evidence| G1[Diagnosis Agent]
+    D1 -->|clinical_analysis + evidence| G2[Treatment Agent]
+    G1 -->|issues + missed_diagnoses| H[비판점 도출]
+    G2 -->|medication_issues + timing_issues| H
+    H --> I[Evidence 2nd Pass CRAG]
+    I --> I2[내부 RAG + PubMed 타겟 검색]
     I2 --> J[Intervention Checker]
-    J --> K[Critic Sub-graph]
+    J --> J2[Agent Router]
+    J2 --> J3[Conditional Agents]
+    J3 --> K[Critic Sub-graph]
     K --> K1[Preprocess → Router → Tools]
-    K1 --> K2[CritiqueBuilder → Feedback Loop]
-    K2 --> K3[Verifier → Solutions]
-    K3 --> L[최종 보고서]
+    K1 --> K2[CritiqueBuilder + literature_evidence]
+    K2 --> K3[Verifier + 문헌 근거 → Solutions]
+    K3 --> K4[Alternative Explanation]
+    K4 --> L[최종 보고서]
     L --> EP2[Episodic Memory Save]
     EP2 -->|LLM요약 → MedCPT → FAISS| EP1
 ```
@@ -449,8 +477,9 @@ Multi-Agent Medical Critique System (LLM-Enhanced)
 [Diagnosis Agent] Running... (+ episodic lessons)
 [Treatment Agent] Running... (+ episodic lessons)
 
-[Evidence 2nd Pass] Starting critique-based search...
-  [2nd Pass] Found 3 preliminary issues
+[Evidence 2nd Pass] Starting critique-based CRAG search...
+  [2nd Pass CRAG] Internal: 1 cases above threshold 0.7
+  [2nd Pass CRAG] External: 3 targeted PubMed articles
 
 [Intervention Checker] Running...
 
@@ -497,35 +526,41 @@ Done!
 ```
 LGBM/
 ├── src/
-│   ├── agents/                          # Multi-Agent 오케스트레이터
+│   ├── pipeline/                         # LangGraph 오케스트레이션
 │   │   ├── __init__.py
-│   │   ├── graph.py                     # LangGraph Orchestrator (메인 그래프)
+│   │   ├── graph.py                     # MedicalCritiqueGraph (메인 그래프)
 │   │   ├── state.py                     # AgentState (TypedDict)
+│   │   └── adapter.py                   # Critic Sub-graph ↔ 메인 그래프 어댑터
+│   │
+│   ├── agents/                           # 개별 에이전트 노드
+│   │   ├── __init__.py                  # 공유 함수 export 포함
 │   │   ├── llm.py                       # LLM 래퍼 (싱글톤, get_llm())
-│   │   ├── critic_adapter.py            # Critic Sub-graph ↔ 메인 그래프 어댑터
-│   │   └── nodes/                       # 개별 에이전트 노드
-│   │       ├── __init__.py
-│   │       ├── chart_structurer.py      # Chart → JSON 구조화 (IE)
-│   │       ├── evidence_agent.py        # 2-Pass CRAG + 임상 패턴 감지
-│   │       ├── diagnosis_agent.py       # 진단 적절성 분석 + episodic
-│   │       ├── treatment_agent.py       # 치료 적절성 + Disposition + episodic
-│   │       └── intervention_checker.py  # 시행된 치료 확인 (Rule-based)
+│   │   ├── chart_structurer.py          # Chart → JSON 구조화 (IE)
+│   │   ├── evidence_agent.py            # 2-Pass CRAG + 공유 포맷 함수
+│   │   │                                #   format_evidence_summary()
+│   │   │                                #   format_clinical_analysis()
+│   │   ├── diagnosis_agent.py           # 진단 적절성 + 문헌 근거(가드레일)
+│   │   ├── treatment_agent.py           # 치료 적절성 + 문헌 근거(가드레일)
+│   │   ├── intervention_checker.py      # 시행된 치료 확인 (Rule-based)
+│   │   ├── agent_router.py              # 조건부 에이전트 선택
+│   │   ├── run_conditional_agents.py    # 조건부 에이전트 실행
+│   │   ├── risk_factor_agent.py         # 위험 인자 분석
+│   │   ├── process_contributor_agent.py # 프로세스 기여 분석
+│   │   └── alternative_explanation_agent.py  # 대안 설명 생성
 │   │
 │   ├── critic/                           # Critic Sub-graph (LangGraph 서브그래프)
-│   │   ├── critic_graph.py              # 서브그래프 정의 (preprocess→router→tools→feedback)
-│   │   ├── critique_builder.py          # LLM 기반 비판점 생성
-│   │   ├── feedback.py                  # 비판 품질 피드백 + 반복 제어
+│   │   ├── critic_graph.py              # 서브그래프 (preprocess→router→tools→critique)
+│   │   ├── critique_builder.py          # LLM 비판점 생성 + literature_evidence 활용
+│   │   ├── verifier.py                  # solutions 생성 (유사 케이스 + 문헌 근거)
 │   │   ├── router.py                    # LLM Router (도구 선택)
 │   │   ├── registry.py                  # 도구 레지스트리
 │   │   ├── runner.py                    # AgentConfig, ToolRegistry
 │   │   ├── tool_base.py                 # 도구 베이스 클래스
-│   │   ├── toolrag.py                   # ToolRAG 인덱스
 │   │   ├── types.py                     # AgentState (Critic 전용)
-│   │   ├── verifier.py                  # Verifier (유사 케이스 기반 solutions)
 │   │   └── tools/                       # Critic 분석 도구
 │   │       ├── __init__.py
 │   │       ├── preprocess_timeline.py   # 타임라인 전처리
-│   │       ├── preprocess_evidence.py   # 근거 전처리
+│   │       ├── preprocess_evidence.py   # evidence_spans 전처리
 │   │       ├── preprocess_gaps.py       # 기록 갭 분석
 │   │       ├── lens_diagnostic_consistency.py   # 진단 일관성 렌즈
 │   │       ├── lens_monitoring_response.py      # 모니터링 응답 렌즈
@@ -546,21 +581,29 @@ LGBM/
 │
 ├── scripts/
 │   ├── run_agent_critique.py            # 메인 실행 스크립트 (LLM 진단 추출 포함)
+│   ├── execute.py                       # 실행 헬퍼
+│   ├── main.py                          # 엔트리포인트
+│   ├── check_imports.py                 # import 검증
 │   └── build_vector_db.py              # Vector DB 구축
 │
+├── backend/                              # API 서버
+│   ├── app.py                           # FastAPI 앱
+│   ├── config.py                        # 서버 설정
+│   └── job_manager.py                   # 비동기 작업 관리
+│
+├── frontend/                             # 프론트엔드 UI
+│   └── ui/
+│       └── streamlit_app.py             # Streamlit 대시보드
+│
 ├── docs/                                # 프로젝트 문서
-│   ├── CODE_ANALYSIS_CRITIC.md          # Critic 서브그래프 코드 분석
-│   ├── MERGE_PLAN_LGBM_CRITIC.md       # 병합 계획
-│   └── MERGE_SUMMARY_CRITIC.md         # 병합 요약
+│   ├── LANGGRAPH_PROCESS_AND_AGENTS.md
+│   ├── OPTIMAL_CRITIC_AGENT_PROCESS.md
+│   └── AGENT_DESIGN_AND_CONDITIONS.md
 │
 ├── data/                                # 데이터 (gitignored)
 │   ├── patient.json                     # 입력 환자 데이터
 │   ├── vector_db/                       # RAG FAISS 인덱스
-│   │   ├── faiss_index.idx
-│   │   └── metadata.pkl
 │   └── episodic_db/                     # 에피소딕 메모리 DB (자동 생성)
-│       ├── episodic_faiss.idx
-│       └── episodic_meta.json
 │
 ├── outputs/
 │   └── reports/                         # 생성된 보고서 (JSON)
@@ -571,9 +614,9 @@ LGBM/
 
 ### 주요 컴포넌트 설명
 
-#### `src/agents/graph.py` - LangGraph Orchestrator
+#### `src/pipeline/graph.py` - LangGraph Orchestrator
 
-메인 그래프: 에피소딕 메모리 검색 → 6개 노드 → Critic Sub-graph → 에피소딕 메모리 저장
+메인 그래프: 에피소딕 메모리 검색 → 10개 노드 → Critic Sub-graph → 에피소딕 메모리 저장
 
 ```python
 from src.pipeline import MedicalCritiqueGraph
@@ -598,21 +641,42 @@ result = graph.run(
 ```
 [PRE] Episodic Memory Recall (진단 필터 + 임베딩 유사도)
     → chart_structurer
-    → evidence_1st (CRAG: 내부 RAG + PubMed)
-    → (diagnosis_agent || treatment_agent)  # 병렬 + episodic_lessons
-    → evidence_2nd (비판 기반 타겟 PubMed)
+    → evidence_1st (CRAG: LLM 임상 분석 + 내부 RAG + PubMed)
+    → (diagnosis_agent || treatment_agent)  # 병렬 + episodic + clinical_analysis + 문헌(가드레일)
+    → evidence_2nd (비판 기반 CRAG: 내부 RAG + PubMed 타겟 검색)
     → intervention_checker
-    → critic sub-graph (preprocess → router → tools → critique → feedback → verifier)
+    → agent_router → conditional_agents (위험 인자/프로세스 기여)
+    → critic sub-graph (preprocess → router → tools → critique(+문헌) → verifier(+문헌))
+    → alternative_explanation
     → END
 [POST] Episodic Memory Save (LLM 요약 → MedCPT → FAISS)
 ```
+
+#### `src/agents/evidence_agent.py` - Evidence Agent + 공유 포맷 함수
+
+Evidence Agent는 2-Pass CRAG를 수행하며, **모든 에이전트가 공유하는 포맷 함수**를 제공:
+
+```python
+# 공유 함수 (Diagnosis/Treatment/CritiqueBuilder/Verifier에서 import)
+from src.agents.evidence_agent import format_evidence_summary, format_clinical_analysis
+
+# evidence dict 전체를 받아 포맷팅 (abstract 포함, 2차 검색 결과 포함)
+evidence_summary = format_evidence_summary(evidence)
+clinical_analysis_summary = format_clinical_analysis(evidence)
+```
+
+**근거 활용 가드레일 (모든 에이전트 공통):**
+- 문헌은 이 환자에 직접 적용 가능한 경우에만 인용
+- 환자 차트 텍스트의 실제 소견이 항상 문헌보다 우선
+- 문헌이 환자 상황과 맞지 않으면 무시
+- 인용 시 PMID 명시 + 적용 이유 설명
 
 #### `src/critic/` - Critic Sub-graph
 
 독립적인 LangGraph 서브그래프로 구현된 비판 파이프라인:
 
 ```
-Preprocessing (timeline, evidence, record_gaps)
+Preprocessing (timeline, evidence_spans, record_gaps)
       ↓
 Router (LLM) → 분석 도구 선택 (예산 내)
       ↓
@@ -623,25 +687,22 @@ Tool 실행:
   - behavior_topk_direct_compare  # 유사 케이스 직접 비교
       ↓
 CritiqueBuilder (LLM) → critique_points (span_id, severity, cohort_comparison)
+  + literature_evidence: 환자에 적합한 문헌만 인용 (PMID 명시)
       ↓
-Feedback (품질 판단)
-  ├─ OK → 종료
-  └─ 불충분 → 추가 도구 실행 → CritiqueBuilder 재호출 (feedback_rounds)
-      ↓
-Verifier → solutions (유사 케이스 근거)
+Verifier → solutions (유사 케이스 + 문헌 근거)
+  + 관련 PubMed PMID 인용 (관련 없으면 유사 케이스만 사용)
 ```
 
 **주요 모듈:**
 | 모듈 | 역할 |
 |------|------|
-| `critic_graph.py` | 서브그래프 정의 및 상태 관리 |
-| `critique_builder.py` | LLM으로 비판점 생성 |
-| `feedback.py` | 비판 품질 평가 + 반복 제어 |
+| `critic_graph.py` | 서브그래프 정의 (preprocess → router → run_tools → critique_builder) |
+| `critique_builder.py` | LLM 비판점 생성 + literature_evidence 활용 |
 | `router.py` | LLM으로 분석 도구 선택 |
-| `verifier.py` | 유사 케이스 기반 솔루션 검증 |
+| `verifier.py` | 유사 케이스 + 문헌 기반 솔루션 생성 |
 | `tools/` | Lens(분석 관점) + Behavior(비교 행동) 도구 |
 
-#### `src/agents/llm.py` - LLM 래퍼
+#### `src/agents/llm.py` + `src/llm/openai_chat.py` - LLM 래퍼
 
 ```python
 from src.agents.llm import get_llm
@@ -772,24 +833,41 @@ python scripts/run_agent_critique.py
 - **출력**: 구조화된 JSON (vitals, symptoms, red_flags, interventions_given, clinical_course, outcome)
 
 ### Evidence Agent (2-Pass CRAG)
-- **1차**: 임상 패턴 감지 (VTE, ACS 등) → CRAG (내부 RAG + PubMed)
-- **2차**: 비판점 기반 타겟 PubMed 검색
+- **1차 (분석 전)**: LLM 임상 맥락 분석 → CRAG (내부 RAG + PubMed)
+  - `clinical_analysis` (임상 우선순위, 소견, 위험 인자, 긴급도)
+  - `evidence_summary` (유사 케이스 + PubMed abstract 포함)
+  - **공유 포맷 함수**: `format_evidence_summary()`, `format_clinical_analysis()`
+- **2차 (분석 후)**: 비판점 기반 CRAG (내부 RAG + PubMed 타겟 검색)
+  - Diagnosis/Treatment 이슈 수집 → Critical 우선 정렬 → LLM 쿼리 생성
+  - 기존 evidence에 병합 (중복 PMID/case_id 제거)
 
 ### Diagnosis Agent
 - 구조화 데이터 기반 진단 적절성 분석
+- `clinical_analysis` + `evidence_summary` (abstract 포함) 활용
 - `episodic_lessons` 참조 (과거 유사 케이스 교훈)
+- **근거 가드레일**: 문헌은 이 환자에 적용 가능할 때만 인용, 차트 데이터 우선
 
 ### Treatment Agent
-- Disposition 평가 + 치료 적절성 + `episodic_lessons` 참조
+- Disposition 평가 + 치료 적절성
+- `clinical_analysis` + `evidence_summary` (abstract 포함) 활용
+- `episodic_lessons` 참조 + **근거 가드레일** 동일 적용
 
 ### Intervention Checker
 - 시행된 치료 확인 (Rule-based) → 허위 비판 차단
 
+### Agent Router + Conditional Agents
+- 케이스 특성 분석 → 위험 인자/프로세스 기여 에이전트 선택적 실행
+- `src/agents/agent_router.py` + `src/agents/run_conditional_agents.py`
+
 ### Critic Sub-graph (`src/critic/`)
 - LangGraph 서브그래프로 독립 실행
-- Preprocessing → LLM Router → Lens/Behavior 도구 → CritiqueBuilder → Feedback 루프
-- Verifier: 유사 케이스 기반 솔루션 검증
-- `critic_adapter.py`를 통해 메인 그래프와 상태 변환
+- Preprocessing → LLM Router → Lens/Behavior 도구 → CritiqueBuilder → Verifier
+- **CritiqueBuilder**: `literature_evidence`로 비판점 강화 (환자 적합 시만 PMID 인용)
+- **Verifier**: 유사 케이스 + 문헌 근거로 solutions 생성 (관련 없으면 유사 케이스만)
+- `src/pipeline/adapter.py`를 통해 메인 그래프와 상태 변환
+
+### Alternative Explanation Agent
+- 대안적 설명 생성 (Critic 후 실행)
 
 ## 테스트 케이스
 
@@ -1144,10 +1222,10 @@ CARE-CRITIC은 단순한 AI 시스템이 아닙니다.
 | - 주요 소견 요약 | - 이미 시행된 치료 목록화 | - 경과 및 Outcome 정리 |
 | - PPT 발표 자료 준비 | - 모든 에이전트가 사용할 데이터 준비 | - **실패 시 회의 중단 (필수)** |
 | | | |
-| **문헌 리뷰어** | **Evidence Agent (2-Pass)** | 임상 패턴 감지 + 비판 기반 검색 |
-| - "PE에 대한 최신 가이드라인은?" | - **1차**: 유사 케이스 + 일반 가이드라인 | - 수술력+흉통+저산소 → PE 쿼리 |
-| - 현재 표준 치료와 비교 | - **2차**: 비판 내용 기반 타겟 검색 🆕 | - "PE 진단 지연" → 관련 문헌 검색 |
-| - 관련 논문 3-5개 제시 | - 1차+2차 결과 병합 | - 비판에 맞는 정확한 근거 확보 |
+| **문헌 리뷰어** | **Evidence Agent (2-Pass CRAG)** | LLM 임상 분석 + 내부 RAG + PubMed |
+| - "PE에 대한 최신 가이드라인은?" | - **1차 CRAG**: LLM 임상 분석 + 내부 RAG + PubMed (abstract 포함) | - clinical_analysis → Diagnosis/Treatment 주입 |
+| - 현재 표준 치료와 비교 | - **2차 CRAG**: 비판 기반 내부 RAG + PubMed 타겟 검색 | - 공유 포맷 함수로 일관된 전달 |
+| - 관련 논문 3-5개 제시 | - 1차+2차 병합 → Critic/Verifier까지 전달 | - 근거 가드레일 (환자 적합 시만 인용) |
 | | | |
 | **진단 전문의 (교수)** | **Diagnosis Agent** | GPT-4o + 임상 맥락 강조 prompt |
 | - "왜 PE를 의심하지 않았나?" | - "진단 불명 + 고위험 패턴 → 감별진단 누락" | - Wells score, PERC rule 언급 유도 |
@@ -1164,11 +1242,11 @@ CARE-CRITIC은 단순한 AI 시스템이 아닙니다.
 | - "Duoneb은 3회 네뷸 했습니다" | - "치료 부재" 비판 차단 | - 중복/허위 지적 필터링 |
 | - "스테로이드도 들어갔습니다" | - 현장 정보 보정 (CDSS 로직) | - Coverage map 생성 |
 | | | |
-| **부서장/좌장 (종합)** | **Critic Sub-graph** | Preprocessing → Router → Tools → CritiqueBuilder → Feedback |
+| **부서장/좌장 (종합)** | **Critic Sub-graph** | Preprocessing → Router → Tools → CritiqueBuilder → Verifier |
 | - "오늘 논의를 정리하면..." | - LLM Router가 분석 도구 선택 | - Lens(진단일관성/중증도/모니터링) + Behavior(직접비교) |
-| - "가장 중요한 문제는 PE 누락" | - **Feedback 루프 (품질 부족 시 재분석)** | - Critical → Medium → Low |
-| - "검색한 문헌이 엉뚱한데?" | - **무관한 문헌 자동 감지** (Crohn/H.pylori) | - "Evidence retrieval failure" 비판 |
-| - "개선안: CTPA 프로토콜 강화" | - **Verifier**: 유사 케이스 기반 Solutions 생성 | - ACCP Guidelines 등 인용 |
+| - "가장 중요한 문제는 PE 누락" | - **CritiqueBuilder**: literature_evidence로 비판 강화 | - Critical → Medium → Low |
+| - "이 문헌이 근거가 됩니다" | - **Verifier**: 유사 케이스 + 문헌 근거로 Solutions | - 환자에 적합한 PMID만 인용 |
+| - "개선안: CTPA 프로토콜 강화" | - 근거 가드레일: 맞지 않으면 인용 안 함 | - ACCP Guidelines 등 인용 |
 | | | |
 | **후속 조치 (Action Items)** | **Episodic Memory (1+3)** | 진단 필터 + LLM 요약 임베딩 |
 | - "다음부터는 이렇게..." | - clinical_text → GPT-4o-mini 요약 → MedCPT → FAISS | - 다음 유사 케이스에 자동 적용 |

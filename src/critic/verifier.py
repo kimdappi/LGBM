@@ -9,6 +9,7 @@ import json
 from typing import Any, Dict, List
 
 from ..llm.openai_chat import OpenAIChatConfig, call_openai_chat_completions, safe_json_loads
+from ..agents.evidence_agent import format_evidence_summary
 
 
 def _bullets(xs: List[Any]) -> str:
@@ -29,16 +30,18 @@ class Verifier:
         self,
         critique: Dict[str, Any],
         similar_cases_topk: List[Dict[str, Any]],
+        evidence: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
         Args:
             critique: critique_points, risk_factors, recommendations (및 patient_id 등)
             similar_cases_topk: 유사 케이스 리스트 (text, age, sex, status 등)
+            evidence: Evidence Agent 검색 결과 (1차 + 2차 PubMed/내부 근거)
 
         Returns:
             { "patient_id": ..., "solutions": [ { "issue", "solution", "evidence", "priority" } ], "raw": ... }
         """
-        prompt = self._build_prompt(critique, similar_cases_topk)
+        prompt = self._build_prompt(critique, similar_cases_topk, evidence=evidence)
         cfg = OpenAIChatConfig(model=self.model, temperature=0.3, max_tokens=4000)
         content = call_openai_chat_completions(
             messages=[{"role": "user", "content": prompt}],
@@ -64,6 +67,7 @@ class Verifier:
         self,
         critique: Dict[str, Any],
         similar_cases: List[Dict[str, Any]],
+        evidence: Dict[str, Any] = None,
     ) -> str:
         critique_block = f"""
 [CRITIQUE]
@@ -94,15 +98,28 @@ Recommendations:
 {(c.get("text") or "")}
 """
 
+        # 문헌 근거 블록 (1차 + 2차 검색 결과)
+        evidence_block = ""
+        if evidence:
+            formatted = format_evidence_summary(evidence)
+            if formatted and formatted != "검색된 근거 없음":
+                evidence_block = f"""
+[LITERATURE EVIDENCE]
+{formatted}
+"""
+
         return f"""
 You are a senior clinical decision verifier.
 
 Task:
-Based on the critique and the TOP-3 similar cases,
+Based on the critique, the TOP-3 similar cases, and available literature evidence,
 generate concrete SOLUTIONS that directly address the critique points.
 
 Rules:
-- Each solution MUST reference at least one similar case as evidence
+- Each solution MUST reference at least one similar case OR literature (PMID) as evidence
+- Cite PubMed literature ONLY when it directly supports the specific solution for this patient's issue
+- Do NOT cite literature just because it is available; relevance to the specific critique point is required
+- If no literature is relevant, use similar cases only — that is perfectly acceptable
 - Do NOT invent new medical facts
 - Be concise, actionable, and clinically realistic
 - Output JSON ONLY
@@ -113,7 +130,7 @@ Output format:
     {{
       "issue": "critique issue",
       "solution": "concrete action",
-      "evidence": "Similar Case 1 / 2 / 3",
+      "evidence": "Similar Case 1 / PMID: 12345678 / etc.",
       "priority": "high | medium | low"
     }}
   ]
@@ -123,4 +140,4 @@ Output format:
 
 [SIMILAR CASES]
 {case_block}
-"""
+{evidence_block}"""

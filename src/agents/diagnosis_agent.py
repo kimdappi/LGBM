@@ -9,6 +9,7 @@
 import re
 from typing import Dict, List, Optional
 from .llm import get_llm
+from .evidence_agent import format_evidence_summary, format_clinical_analysis
 
 
 # ──────────────────────────────────────────────
@@ -178,7 +179,10 @@ ANALYSIS_PROMPT = """
 실제 케이스 텍스트 (전체 맥락 파악용):
 {clinical_text_excerpt}
 
-검색된 근거:
+Evidence Agent 임상 맥락 분석:
+{clinical_analysis_summary}
+
+검색된 근거 (1차 + 2차):
 {evidence_summary}
 
 과거 유사 케이스 분석 경험:
@@ -215,7 +219,13 @@ ANALYSIS_PROMPT = """
    - Priority 4: 기타 진단/치료 이슈
    - Iatrogenic trauma가 있으면 반드시 issues의 **첫 번째**로 배치하고 severity="critical"
 
-6. **과거 유사 케이스 교훈이 있으면 반드시 참고**
+6. **검색된 근거(PubMed/유사 케이스)는 참고 자료로 활용**
+   - 문헌은 이 환자의 구체적 상황에 직접 적용 가능한 경우에만 인용
+   - 문헌이 이 환자의 진단/상황과 맞지 않으면 무시할 것
+   - **환자 차트 텍스트의 실제 소견이 항상 문헌보다 우선**
+   - 문헌을 인용할 때는 PMID를 명시하고, 왜 이 환자에게 적용되는지 설명
+
+7. **과거 유사 케이스 교훈이 있으면 반드시 참고**
 
 출력은 JSON만:
 {{
@@ -245,33 +255,6 @@ ANALYSIS_PROMPT = """
 }}
 """
 
-
-def format_evidence_summary(internal: Dict, external: Dict) -> str:
-    """근거 요약 생성"""
-    lines = []
-    
-    internal_results = internal.get("results", [])
-    external_results = external.get("results", [])
-    
-    if internal_results:
-        lines.append("### 내부 유사 케이스")
-        survived = [c for c in internal_results if c.get("status") in ["alive", "survived"]]
-        died = [c for c in internal_results if c.get("status") in ["dead", "died"]]
-        lines.append(f"- 생존: {len(survived)}건")
-        lines.append(f"- 사망: {len(died)}건")
-        for c in internal_results[:2]:
-            lines.append(f"- [유사도 {c.get('score', 0):.2f}] {c.get('content', '')[:150]}...")
-    else:
-        lines.append("### 내부 유사 케이스: 없음 (유사도 < 0.7)")
-    
-    if external_results:
-        lines.append("\n### 외부 문헌 (PubMed)")
-        for e in external_results[:3]:
-            lines.append(f"- [PMID: {e.get('pmid')}] {e.get('title', '')}")
-    else:
-        lines.append("\n### 외부 문헌: 없음")
-    
-    return "\n".join(lines)
 
 
 def format_structured_summary(structured: Dict) -> Dict[str, str]:
@@ -371,9 +354,8 @@ def run_diagnosis_agent(state: Dict) -> Dict:
     print(f"  [Diagnosis Agent] clinical_text length: {len(patient.get('clinical_text', ''))} chars")
     print(f"  [Diagnosis Agent] Using structured data")
     
-    internal = evidence.get("internal", {})
-    external = evidence.get("external", {})
-    evidence_summary = format_evidence_summary(internal, external)
+    evidence_summary = format_evidence_summary(evidence)
+    clinical_analysis_summary = format_clinical_analysis(evidence)
     
     # 구조화 데이터 사용 (무조건)
     summaries = format_structured_summary(structured)
@@ -453,6 +435,7 @@ def run_diagnosis_agent(state: Dict) -> Dict:
         death_alignment_info=death_alignment_info,
         procedural_safety_findings=procedural_safety_findings,
         clinical_text_excerpt=clinical_text_excerpt,
+        clinical_analysis_summary=clinical_analysis_summary,
         evidence_summary=evidence_summary,
         episodic_lessons=episodic_lessons,
     )

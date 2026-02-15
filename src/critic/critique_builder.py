@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from .types import AgentState, JsonDict
 from ..llm.openai_chat import OpenAIChatConfig, call_openai_chat_completions, safe_json_loads
+from ..agents.evidence_agent import format_evidence_summary
 
 
 def _as_json(x: Any) -> Any:
@@ -167,12 +168,15 @@ class CritiqueBuilder:
                 ref["diagnosis_analysis"] = cohort.get("diagnosis_analysis")
             if cohort.get("treatment_analysis") is not None:
                 ref["treatment_analysis"] = cohort.get("treatment_analysis")
-            if cohort.get("evidence") is not None:
-                ref["evidence"] = cohort.get("evidence")
             if cohort.get("intervention_coverage") is not None:
                 ref["intervention_coverage"] = cohort.get("intervention_coverage")
             if ref:
                 payload["reference_only_prior_results"] = ref
+
+            # Evidence (문헌 근거)는 적극 활용 대상 → 별도 키로 분리
+            evidence_data = cohort.get("evidence")
+            if evidence_data:
+                payload["literature_evidence"] = format_evidence_summary(evidence_data)
 
         mode_line = "Revise the previous critique using patch_instructions." if previous_critique else "Generate a critique report."
 
@@ -180,6 +184,7 @@ class CritiqueBuilder:
 {mode_line}
 Use ONLY the provided structured evidence. Do not invent unobserved facts.
 If "reference_only_prior_results" is present in Input JSON, use it only as reference; do not depend on it. Base your critique on preprocessing, lens_results, behavior_results.
+If "literature_evidence" is present, use it to support or challenge your critique points ONLY when directly relevant to the patient's specific issues. Cite PMIDs when applicable. Do NOT force-fit literature that does not match the patient's clinical context; ignore irrelevant articles.
 
 Input JSON:
 {payload}
@@ -204,6 +209,7 @@ Rules:
 - If the record is insufficient, explicitly say so and prefer cautious language.
 - If behavior_topk_direct_compare exists, use it to fill cohort_comparison with concrete differences.
 - If previous_critique is provided, keep good parts and fix only what is requested.
+- If literature_evidence is present, use it to strengthen critique points with citations (e.g., "PMID: 12345678 supports..."). Literature evidence includes PubMed articles (1st pass general + 2nd pass critique-targeted) and internal similar cases.
 
 ★ CRITICAL SEVERITY HIERARCHY (MUST follow this order):
 1. **Iatrogenic Trauma / Procedural Complications** = HIGHEST PRIORITY (severity: high)

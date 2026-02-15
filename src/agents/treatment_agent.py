@@ -2,6 +2,7 @@
 
 from typing import Dict, List
 from .llm import get_llm
+from .evidence_agent import format_evidence_summary, format_clinical_analysis
 
 SYSTEM_PROMPT = """당신은 중환자실 치료 전문의입니다. 시행된 치료를 확인한 뒤 치료/처치의 적절성(선택·용량·타이밍)과 disposition을 근거 기반으로 평가하세요."""
 
@@ -16,7 +17,10 @@ ANALYSIS_PROMPT = """
 이미 시행된 치료(반드시 확인):
 {interventions_given}
 
-근거(요약):
+Evidence Agent 임상 맥락 분석:
+{clinical_analysis_summary}
+
+근거 (1차 + 2차):
 {evidence_summary}
 
 과거 유사 케이스 분석 경험:
@@ -27,7 +31,12 @@ ANALYSIS_PROMPT = """
 2) Disposition 평가:
    - 환자 expired면: 조기퇴원/입원권고 금지. 대신 치료 과정의 문제(합병증/지연/부적절 약물/모니터링 실패) 중심으로 분석하고 `is_appropriate`는 N/A로 표기.
    - 생존 케이스에서 고위험(저산소/지속 빈맥·빈호흡/치명적 감별 미배제/진단 불명확) 조기퇴원은 부적절로 평가.
-3) 과거 유사 케이스 교훈이 있으면 반드시 참고:
+3) 검색된 근거(PubMed/유사 케이스)는 참고용:
+   - 이 환자의 실제 임상 상황에 부합하는 경우에만 인용
+   - 문헌이 환자 상황과 맞지 않으면 인용하지 말 것
+   - **환자의 실제 데이터(구조화 소견, 시행된 치료)가 항상 우선**
+   - 문헌 인용 시 PMID를 명시하고, 적용 가능한 이유를 설명
+4) 과거 유사 케이스 교훈이 있으면 반드시 참고:
    - 과거 경험의 약물/치료 관련 이슈가 이 케이스에도 해당되는지 확인
    - 해당되면 분석에 반영 (예: 과거 유사 케이스에서 벤조 투여 위험이 있었다면, 이 케이스에서도 확인)
 
@@ -47,31 +56,6 @@ ANALYSIS_PROMPT = """
 }}
 """
 
-
-def format_evidence_summary(internal: Dict, external: Dict) -> str:
-    """근거 요약 생성"""
-    lines = []
-    
-    internal_results = internal.get("results", [])
-    external_results = external.get("results", [])
-    
-    if internal_results:
-        lines.append("### 내부 유사 케이스")
-        for c in internal_results[:3]:
-            lines.append(f"- [유사도 {c.get('score', 0):.2f}] [{c.get('status')}] {c.get('content', '')[:150]}...")
-    else:
-        lines.append("### 내부 유사 케이스: 없음 (유사도 < 0.7)")
-    
-    if external_results:
-        lines.append("\n### 외부 문헌 (PubMed)")
-        for e in external_results[:3]:
-            lines.append(f"- [PMID: {e.get('pmid')}] {e.get('title', '')}")
-            if e.get("abstract"):
-                lines.append(f"  {e.get('abstract', '')[:200]}...")
-    else:
-        lines.append("\n### 외부 문헌: 없음")
-    
-    return "\n".join(lines)
 
 
 def format_interventions_given(structured: Dict) -> str:
@@ -130,9 +114,8 @@ def run_treatment_agent(state: Dict) -> Dict:
     
     print(f"  [Treatment Agent] Using structured data")
     
-    internal = evidence.get("internal", {})
-    external = evidence.get("external", {})
-    evidence_summary = format_evidence_summary(internal, external)
+    evidence_summary = format_evidence_summary(evidence)
+    clinical_analysis_summary = format_clinical_analysis(evidence)
     
     # 구조화 데이터 사용 (무조건)
     vitals = structured.get("vitals", {})
@@ -158,6 +141,7 @@ def run_treatment_agent(state: Dict) -> Dict:
         vitals_summary=vitals_summary,
         clinical_course=clinical_course,
         interventions_given=interventions_given,
+        clinical_analysis_summary=clinical_analysis_summary,
         evidence_summary=evidence_summary,
         episodic_lessons=episodic_lessons,
     )

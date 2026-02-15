@@ -123,8 +123,8 @@ class MedicalCritiqueGraph:
         return run_treatment_agent(state)
 
     def _evidence_2nd_node(self, state: AgentState) -> Dict:
-        print("\n[Evidence 2nd Pass] Starting critique-based search...")
-        return run_evidence_agent_2nd_pass(state)
+        print("\n[Evidence 2nd Pass] Starting critique-based CRAG search...")
+        return run_evidence_agent_2nd_pass(state, rag_retriever=self.rag_retriever)
 
     def _intervention_checker_node(self, state: AgentState) -> Dict:
         return check_intervention_coverage(state)
@@ -170,7 +170,11 @@ class MedicalCritiqueGraph:
                     "risk_factors": critique_result.get("risk_factors", []),
                     "recommendations": critique_result.get("recommendations", []),
                 }
-                verifier_result = verifier.verify(critique_for_verifier, similar_cases)
+                verifier_result = verifier.verify(
+                    critique_for_verifier,
+                    similar_cases,
+                    evidence=state.get("evidence"),
+                )
                 if verifier_result.get("solutions"):
                     updates["solutions"] = normalize_solutions(verifier_result["solutions"])
             except Exception:

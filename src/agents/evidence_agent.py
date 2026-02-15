@@ -598,6 +598,111 @@ Be GENEROUS with is_valid=true if the outcome/complication pattern matches."""
 
 
 # ---------------------------------------------------------------------------
+# 3.5 Evidence 포맷팅 (공유 함수 - Diagnosis/Treatment/Critic 공용)
+# ---------------------------------------------------------------------------
+
+def format_evidence_summary(evidence: Dict, include_abstract: bool = True) -> str:
+    """
+    Evidence 검색 결과를 에이전트 프롬프트용 문자열로 포맷팅.
+    Diagnosis/Treatment/Critic 등 모든 에이전트가 공유.
+
+    Args:
+        evidence: run_evidence_agent() 반환 dict 전체
+        include_abstract: PubMed abstract 포함 여부 (기본: True)
+    """
+    if not evidence:
+        return "검색된 근거 없음"
+
+    lines: List[str] = []
+
+    internal = evidence.get("internal", {})
+    external = evidence.get("external", {})
+
+    internal_results = internal.get("results", [])
+    external_results = external.get("results", [])
+
+    # ── 내부 유사 케이스 ──
+    if internal_results:
+        lines.append("### 내부 유사 케이스")
+        survived = [c for c in internal_results if str(c.get("status", "")).lower() in ("alive", "survived")]
+        died = [c for c in internal_results if str(c.get("status", "")).lower() in ("dead", "died")]
+        lines.append(f"- 생존: {len(survived)}건, 사망: {len(died)}건")
+        for c in internal_results[:3]:
+            score = c.get("score", c.get("similarity", 0))
+            status = c.get("status", "unknown")
+            content = c.get("content", c.get("text", ""))
+            lines.append(f"- [유사도 {score:.2f}] [{status}] {content}...")
+    else:
+        lines.append("### 내부 유사 케이스: 없음 (유사도 < 0.7)")
+
+    # ── PubMed 문헌 ──
+    if external_results:
+        lines.append("\n### 외부 문헌 (PubMed)")
+        for e in external_results[:5]:
+            lines.append(f"- [PMID: {e.get('pmid')}] {e.get('title', '')}")
+            if include_abstract and e.get("abstract"):
+                lines.append(f"  Abstract: {str(e['abstract'])}...")
+    else:
+        lines.append("\n### 외부 문헌: 없음")
+
+    # ── 2차 비판 기반 타겟 검색 결과 ──
+    critique_based = evidence.get("critique_based", {})
+    critique_ext = critique_based.get("results", [])
+    critique_int = critique_based.get("internal_results", [])
+    if critique_ext or critique_int:
+        lines.append("\n### 비판 기반 타겟 검색 (2차)")
+        lines.append(f"쿼리: {critique_based.get('query', 'N/A')}")
+        if critique_int:
+            lines.append(f"  2차 내부 유사 케이스: {len(critique_int)}건")
+            for c in critique_int[:2]:
+                score = c.get("score", 0)
+                content = c.get("content", c.get("text", ""))
+                lines.append(f"  - [유사도 {score:.2f}] {content}...")
+        for e in critique_ext[:3]:
+            lines.append(f"- [PMID: {e.get('pmid')}] {e.get('title', '')}")
+            if include_abstract and e.get("abstract"):
+                lines.append(f"  Abstract: {str(e['abstract'])}...")
+
+    return "\n".join(lines)
+
+
+def format_clinical_analysis(evidence: Dict) -> str:
+    """
+    Evidence Agent의 LLM 임상 분석 결과를 프롬프트용 문자열로 포맷팅.
+    """
+    if not evidence:
+        return "임상 분석 결과 없음"
+
+    analysis = evidence.get("clinical_analysis", {})
+    if not analysis:
+        return "임상 분석 결과 없음"
+
+    lines: List[str] = []
+
+    priorities = analysis.get("clinical_priorities", [])
+    if priorities:
+        lines.append(f"임상 우선순위: {', '.join(str(p) for p in priorities[:5])}")
+
+    findings = analysis.get("key_findings", [])
+    if findings:
+        lines.append(f"주요 소견: {', '.join(str(f) for f in findings[:5])}")
+
+    risk_factors = analysis.get("risk_factors", [])
+    if risk_factors:
+        lines.append(f"위험 인자: {', '.join(str(r) for r in risk_factors[:5])}")
+
+    urgency = analysis.get("urgency_level", "")
+    if urgency:
+        lines.append(f"긴급도: {urgency}")
+
+    strategy = analysis.get("search_strategy", "")
+    if strategy:
+        lines.append(f"검색 전략: {strategy}")
+
+    return "\n".join(lines) if lines else "임상 분석 결과 없음"
+
+
+# ---------------------------------------------------------------------------
 # 4. Evidence Agent 1차 (CRAG: 유사 케이스 + PubMed)
 # ---------------------------------------------------------------------------
 
@@ -807,39 +912,40 @@ Query: pulmonary embolism missed diagnosis pneumonia D-dimer diagnostic delay"""
         return default_query
 
 
-def run_evidence_agent_2nd_pass(state: Dict) -> Dict:
+def run_evidence_agent_2nd_pass(state: Dict, rag_retriever=None) -> Dict:
     """
-    2차 Evidence 검색 (비판 기반)
-    
+    2차 Evidence 검색 (CRAG: 내부 RAG + PubMed, 비판 기반)
+
     Diagnosis/Treatment Agent의 분석 결과를 바탕으로
-    비판 내용에 맞는 타겟 검색 수행
+    비판 내용에 맞는 타겟 검색 수행 (CRAG 전략)
+
+    Args:
+        state: AgentState
+        rag_retriever: 내부 RAG 검색기 (1차와 동일 인스턴스)
     """
     patient = state.get("patient_case", {})
     existing_evidence = state.get("evidence", {})
-    
-    # 초기 이슈 수집 (Diagnosis + Treatment Agent 결과)
+
+    # ── 초기 이슈 수집 (Diagnosis + Treatment Agent 결과) ──
     preliminary_issues = []
-    
+
     diagnosis_analysis = state.get("diagnosis_analysis", {})
     if diagnosis_analysis:
-        # Diagnosis Agent의 이슈
         for issue in diagnosis_analysis.get("issues", []):
             preliminary_issues.append({
                 "category": "diagnosis",
                 "issue": issue.get("issue", "") if isinstance(issue, dict) else str(issue),
                 "severity": issue.get("severity", "medium") if isinstance(issue, dict) else "medium"
             })
-        # 놓친 진단
         for missed in diagnosis_analysis.get("missed_diagnoses", []):
             preliminary_issues.append({
                 "category": "missed_diagnosis",
                 "issue": missed.get("condition", "") if isinstance(missed, dict) else str(missed),
                 "severity": "critical"
             })
-    
+
     treatment_analysis = state.get("treatment_analysis", {})
     if treatment_analysis:
-        # 1) medication_issues
         for issue in treatment_analysis.get("medication_issues", []) or []:
             text = issue if isinstance(issue, str) else issue.get("issue", str(issue))
             preliminary_issues.append({
@@ -847,7 +953,6 @@ def run_evidence_agent_2nd_pass(state: Dict) -> Dict:
                 "issue": text,
                 "severity": "medium"
             })
-        # 2) timing_issues
         for issue in treatment_analysis.get("timing_issues", []) or []:
             text = issue if isinstance(issue, str) else issue.get("issue", str(issue))
             preliminary_issues.append({
@@ -855,47 +960,74 @@ def run_evidence_agent_2nd_pass(state: Dict) -> Dict:
                 "issue": text,
                 "severity": "medium"
             })
-    
+
     # 이슈가 없으면 2차 검색 스킵
     if not preliminary_issues:
         print("  [2nd Pass] No preliminary issues found, skipping")
         return {}
-    
+
     # Critical 이슈 우선 정렬
     preliminary_issues.sort(key=lambda x: 0 if x.get("severity") == "critical" else 1)
-    
+
     print(f"  [2nd Pass] Found {len(preliminary_issues)} preliminary issues")
     print(f"  [2nd Pass] Top issues: {[i.get('issue', '')[:50] for i in preliminary_issues[:3]]}")
-    
-    # 비판 기반 PubMed 쿼리 생성 및 검색
+
+    # 비판 기반 쿼리 생성
     critique_query = generate_critique_based_query(patient, preliminary_issues)
+
+    # === CRAG 1단계: 내부 RAG 검색 (비판 기반 쿼리) ===
+    critique_internal_results: List[Dict] = []
+    if rag_retriever:
+        try:
+            raw_results = search_internal_rag(critique_query, rag_retriever, top_k=3)
+            critique_internal_results = [
+                r for r in raw_results
+                if r.get("score", 0) >= SIMILARITY_THRESHOLD
+            ]
+            print(f"  [2nd Pass CRAG] Internal: {len(critique_internal_results)} cases above threshold {SIMILARITY_THRESHOLD}")
+        except Exception as e:
+            print(f"  [2nd Pass CRAG] Internal RAG search failed: {e}")
+
+    # === CRAG 2단계: PubMed 검색 ===
     critique_results = search_pubmed(critique_query, max_results=5)
-    
-    print(f"  [2nd Pass] Found {len(critique_results)} targeted PubMed articles")
-    
-    # 기존 evidence에 2차 검색 결과 병합
-    updated_evidence = existing_evidence.copy()
-    
-    # 2차 검색 결과 추가
+    print(f"  [2nd Pass CRAG] External: {len(critique_results)} targeted PubMed articles")
+
+    # ── 기존 evidence에 2차 검색 결과 병합 (원본 mutation 방지) ──
+    updated_evidence = {
+        k: v for k, v in existing_evidence.items()
+        if k not in ("internal", "external", "total_sources", "critique_based")
+    }
+
+    # 2차 검색 결과 섹션 추가
     updated_evidence["critique_based"] = {
         "query": critique_query,
         "results": critique_results,
         "count": len(critique_results),
+        "internal_results": critique_internal_results,
+        "internal_count": len(critique_internal_results),
         "preliminary_issues": preliminary_issues[:5]
     }
-    
-    # 외부 결과에 2차 결과도 병합 (중복 PMID 제거)
-    existing_external = updated_evidence.get("external", {}).get("results", [])
-    existing_pmids = {r.get("pmid") for r in existing_external}
-    
-    new_results = [r for r in critique_results if r.get("pmid") not in existing_pmids]
-    
-    if new_results:
-        updated_evidence["external"]["results"].extend(new_results)
-        updated_evidence["external"]["count"] = len(updated_evidence["external"]["results"])
-        updated_evidence["total_sources"] = (
-            updated_evidence.get("internal", {}).get("count", 0) + 
-            updated_evidence["external"]["count"]
-        )
-    
+
+    # 외부 결과 병합 (새 리스트 생성, 중복 PMID 제거)
+    prev_external = existing_evidence.get("external", {}).get("results", [])
+    prev_pmids = {r.get("pmid") for r in prev_external}
+    new_external = [r for r in critique_results if r.get("pmid") not in prev_pmids]
+    merged_external = prev_external + new_external
+    updated_evidence["external"] = {
+        "results": merged_external,
+        "count": len(merged_external),
+    }
+
+    # 내부 결과 병합 (새 리스트 생성, 중복 case_id 제거)
+    prev_internal = existing_evidence.get("internal", {}).get("results", [])
+    prev_case_ids = {r.get("case_id") for r in prev_internal if r.get("case_id")}
+    new_internal = [r for r in critique_internal_results if r.get("case_id") not in prev_case_ids]
+    merged_internal = prev_internal + new_internal
+    updated_evidence["internal"] = {
+        "results": merged_internal,
+        "count": len(merged_internal),
+    }
+
+    updated_evidence["total_sources"] = len(merged_internal) + len(merged_external)
+
     return {"evidence": updated_evidence}
