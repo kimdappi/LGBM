@@ -189,6 +189,8 @@ If "literature_evidence" is present, use it to support or challenge your critiqu
 Input JSON:
 {payload}
 
+You MUST return 3-5 critique points depending on case complexity. Include ALL clinically significant issues — do not omit important findings just to keep the list short.
+
 Return JSON only:
 {{
   "analysis": "overall assessment (2-6 sentences)",
@@ -203,6 +205,7 @@ Return JSON only:
   "risk_factors": ["..."],
   "recommendations": ["..."]
 }}
+★ Output 3-5 critique_points: 3 for simple cases, up to 5 for complex cases with multiple distinct issues (procedural, medication, fluid management, process errors). Do NOT pad with trivial issues; every point must be clinically meaningful.
 
 Rules:
 - Every critique point MUST cite span_id OR record_uncertainty.
@@ -225,7 +228,7 @@ Rules:
 Do NOT let medication errors overshadow iatrogenic procedural complications in the ranking.
 """
 
-        cfg = OpenAIChatConfig(model=self.model, temperature=0.2, max_tokens=1600)
+        cfg = OpenAIChatConfig(model=self.model, temperature=0.2, max_tokens=2500)
         content = call_openai_chat_completions(messages=[{"role": "user", "content": prompt}], config=cfg)
         obj = safe_json_loads(content) or {}
 

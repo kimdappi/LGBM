@@ -17,6 +17,7 @@ import re
 
 # PubMed 설정
 Entrez.email = os.getenv("PUBMED_EMAIL", "researcher@example.com")
+Entrez.api_key = os.getenv("NCBI_API_KEY")  # API key → 10 req/s + 응답 속도 개선
 
 # CRAG 임계치
 SIMILARITY_THRESHOLD = 0.7
@@ -25,6 +26,16 @@ SIMILARITY_THRESHOLD = 0.7
 # ---------------------------------------------------------------------------
 # 1. PubMed / 내부 RAG 검색
 # ---------------------------------------------------------------------------
+
+def _truncate_query(query: str, max_words: int = 4) -> str:
+    """PubMed 쿼리가 너무 길면 핵심 키워드만 남김 (AND 폭발 방지)"""
+    words = query.strip().split()
+    if len(words) <= max_words:
+        return query
+    truncated = " ".join(words[:max_words])
+    print(f"  [PubMed] Query too long ({len(words)} words), truncated to {max_words}: '{truncated}'")
+    return truncated
+
 
 def search_pubmed(query: str, max_results: int = 5, use_mesh: bool = True) -> List[Dict]:
     """
@@ -35,29 +46,41 @@ def search_pubmed(query: str, max_results: int = 5, use_mesh: bool = True) -> Li
         max_results: 최대 결과 수
         use_mesh: MeSH term 사용 여부 (기본: True)
     """
+    # 안전장치: 쿼리가 5단어 이상이면 4단어로 자름 (PubMed AND 폭발 방지)
+    query = _truncate_query(query, max_words=4)
+    
     try:
         # M&M 목적: 오류/합병증/예방/해결책 특화 필터
         if use_mesh:
-            # 우선순위 1: 가이드라인 + 안전/오류/합병증 키워드
-            # 우선순위 2: Systematic review (근거 수준 높음)
-            # 우선순위 3: Clinical trial (실제 증거)
             search_query = f"({query}) AND (guideline[pt] OR systematic review[pt] OR meta-analysis[pt] OR clinical trial[pt])"
         else:
             search_query = query
         
+        print(f"  [PubMed] Searching: '{search_query}'")
         handle = Entrez.esearch(db="pubmed", term=search_query, retmax=max_results, sort="relevance")
         record = Entrez.read(handle)
         handle.close()
         
-        # Fallback: MeSH 필터로 결과 없으면 일반 검색 재시도
+        # Fallback 1: MeSH 필터로 결과 없으면 일반 검색 재시도
         if not record["IdList"] and use_mesh:
             print(f"  [PubMed] No results with filters, retrying without filters...")
             handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results, sort="relevance")
             record = Entrez.read(handle)
             handle.close()
         
+        # Fallback 2: 여전히 0건이면 처음 2단어로 재시도
+        if not record["IdList"] and len(query.split()) > 2:
+            short_query = " ".join(query.split()[:2])
+            print(f"  [PubMed] Still no results, retrying with shorter query: '{short_query}'")
+            handle = Entrez.esearch(db="pubmed", term=short_query, retmax=max_results, sort="relevance")
+            record = Entrez.read(handle)
+            handle.close()
+        
         if not record["IdList"]:
+            print(f"  [PubMed] No results found after all fallbacks")
             return []
+        
+        print(f"  [PubMed] Found {len(record['IdList'])} article IDs")
         
         # 초록 가져오기
         handle = Entrez.efetch(db="pubmed", id=record["IdList"], rettype="abstract", retmode="xml")
@@ -298,32 +321,35 @@ Risk Factors: {', '.join(risk_factors[:3])}
             all_conditions = secondary + key_conditions
             comorbidities_info = f"\nComorbidities: {', '.join(all_conditions[:5])}"
         
-        prompt = f"""Generate ONE PubMed query for M&M (errors/complications + prevention).
+        prompt = f"""Generate ONE PubMed search query for M&M conference literature.
 
 Primary Diagnosis: {diagnosis}
 {comorbidities_info}
 {analysis_info}
 
-M&M Conference Goal:
-- Find literature about ERRORS, COMPLICATIONS, and SOLUTIONS about the Primary Diagnosis
-- Focus on what went wrong, what to avoid, and how to prevent
-- NOT just general treatment guidelines
-
-Context:
-- PubMed will return only TOP 5 results (max_results=5)
-- More specific = higher quality top 5
-- Focus on: diagnostic errors, complications, adverse events, prevention strategies
+CRITICAL PubMed Rules:
+- PubMed treats spaces as AND logic: each word MUST appear in the article
+- More words = fewer results. Too many keywords = 0 results!
+- Use 2-4 medical keywords MAXIMUM
 
 Requirements:
-1. 5-8 keywords total (specific but not too narrow)
-2. PRIORITY ORDER (most important first):
-   a) PRIMARY DIAGNOSIS (required, must be FIRST keyword)
-   b) M&M keyword (diagnostic error / missed diagnosis / complication / prevention)
-   c) Clinical context (post-operative, ICU, emergency, etc.)
-   d) Risk factors or comorbidities (if relevant)
-   e) "guideline" or "management" (optional, at the end)
+1. EXACTLY 2-4 keywords (NO MORE than 4!)
+2. First keyword: primary diagnosis (e.g., "hepatic encephalopathy")
+3. Second keyword: one M&M-relevant term (complication / prevention / management / error)
+4. Optional 3rd-4th: ONLY if highly specific and essential
+5. Do NOT include generic words like "patient", "hospital", "treatment"
+6. Do NOT use natural language phrases — use only medical terms
 
-Generate the query. Return ONLY the query string, no explanations."""
+Good examples:
+- "hepatic encephalopathy benzodiazepines"
+- "cirrhosis paracentesis complication"
+- "sepsis antibiotic delay mortality"
+
+Bad examples (TOO LONG, will return 0):
+- "hepatic encephalopathy benzodiazepines contraindicated mental status complication prevention"
+- "cirrhosis decompensated paracentesis bleeding complication prevention guideline management"
+
+Return ONLY the query string (2-4 keywords), nothing else."""
 
         response = client.chat.completions.create(
             model=os.getenv("LLM_MODEL", "gpt-4o"),
@@ -871,25 +897,35 @@ def generate_critique_based_query(patient: Dict, preliminary_issues: List[Dict])
             for issue in preliminary_issues[:5]
         ])
         
-        prompt = f"""Generate ONE PubMed query to find evidence for these clinical issues.
+        prompt = f"""Generate ONE PubMed query to find evidence for the MOST CRITICAL issue below.
 
 Patient Diagnosis: {diagnosis}
 
 Issues Found:
 {issues_text}
 
-Goal: Find literature about these SPECIFIC issues (not general guidelines)
+CRITICAL PubMed Rules:
+- PubMed treats spaces as AND logic: each word MUST appear in the article
+- More words = fewer results. Too many keywords = 0 results!
+- Use 2-4 medical keywords MAXIMUM
 
-Rules:
-1. Focus on the MOST CRITICAL issue
-2. Include diagnosis + specific issue keywords
-3. Add: "missed diagnosis" / "delayed diagnosis" / "complication" / "prevention" as relevant
-4. 5-8 keywords total
-5. Return ONLY the query string
+Requirements:
+1. EXACTLY 2-4 keywords (NO MORE than 4!)
+2. Pick the SINGLE most critical issue from the list above
+3. First keyword: the medical condition or procedure involved
+4. Second keyword: what went wrong (complication / error / adverse / contraindicated)
+5. Optional 3rd-4th: only if highly specific and essential
+6. Do NOT use natural language phrases — only medical terms
 
-Example:
-Issues: "PE diagnosis delayed", "D-dimer not ordered"
-Query: pulmonary embolism missed diagnosis pneumonia D-dimer diagnostic delay"""
+Good examples:
+- "paracentesis hemoperitoneum cirrhosis"
+- "benzodiazepines hepatic encephalopathy"  
+- "pulmonary embolism missed diagnosis"
+
+Bad examples (TOO LONG, will return 0):
+- "hepatic encephalopathy benzodiazepines contraindicated mental status complication prevention"
+
+Return ONLY the query string (2-4 keywords), nothing else."""
 
         response = client.chat.completions.create(
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
