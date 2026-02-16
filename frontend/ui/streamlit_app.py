@@ -533,7 +533,7 @@ if st.session_state.page == "patient_analysis":
                     <span class="t-dot t-yellow"></span>
                     <span class="t-dot t-green"></span>
                     </div>
-                    <div class="log-title">Live Logs (append)</div>
+                    <div class="log-title">Live Logs</div>
                     <div class="log-meta">{meta}</div>
                 </div>
 
@@ -543,7 +543,7 @@ if st.session_state.page == "patient_analysis":
                 </div>
 
                 <script>
-                // iframe 내부에서만 접근 (document로 충분)
+                // iframe 내부에서만 접근 
                 const el = document.getElementById("logBody");
                 if (el) {{
                     el.scrollTop = el.scrollHeight;
