@@ -1,0 +1,318 @@
+
+    <html>
+    <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>CARE-CRITIC Report | 22222222</title>
+    <style>
+        :root {
+        --bg: #0b1020;
+        --fg: #d6deeb;
+        --muted: #8aa1c1;
+        --card: rgba(255,255,255,0.06);
+        --border: rgba(255,255,255,0.12);
+        --accent: #7aa2ff;
+        --good: #37d67a;
+        --warn: #ffcc66;
+        --bad: #ff6b6b;
+        --crit: #ff4d4d;
+        }
+        body {
+        margin: 0; padding: 28px;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto;
+        background: radial-gradient(1200px 600px at 20% -10%, rgba(122,162,255,0.25), transparent 60%),
+                    radial-gradient(1000px 500px at 90% 0%, rgba(55,214,122,0.12), transparent 55%),
+                    var(--bg);
+        color: var(--fg);
+        }
+        a { color: var(--accent); text-decoration: none; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        .topbar { display:flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .title { font-size: 22px; font-weight: 800; letter-spacing: 0.2px; }
+        .subtitle { color: var(--muted); font-size: 13px; }
+        .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 16px; }
+        .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        backdrop-filter: blur(8px);
+        }
+        .card h3 { margin: 0 0 10px 0; font-size: 14px; color: #e6eeff; }
+        .kv { display:grid; grid-template-columns: 170px 1fr; gap: 8px 12px; font-size: 13px; }
+        .k { color: var(--muted); }
+        .v { color: var(--fg); }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New"; font-size: 12px; }
+        .muted { color: var(--muted); font-size: 13px; }
+        .section { margin-top: 18px; }
+        .section h2 { font-size: 16px; margin: 0 0 10px 0; }
+        .sev {
+        display:inline-block; padding: 3px 9px; border-radius: 999px;
+        font-size: 11px; font-weight: 800; letter-spacing: 0.3px;
+        border: 1px solid var(--border);
+        }
+        .sev-critical { background: rgba(255,77,77,0.18); color: #ffd1d1; border-color: rgba(255,77,77,0.35); }
+        .sev-high     { background: rgba(255,107,107,0.14); color: #ffdada; border-color: rgba(255,107,107,0.28); }
+        .sev-medium   { background: rgba(255,204,102,0.14); color: #ffe7b3; border-color: rgba(255,204,102,0.28); }
+        .sev-low      { background: rgba(55,214,122,0.10); color: #c7ffe0; border-color: rgba(55,214,122,0.22); }
+        .sev-unknown  { background: rgba(138,161,193,0.12); color: #d6deeb; border-color: rgba(138,161,193,0.25); }
+        .pill {
+        display:inline-block; padding: 3px 8px; border-radius: 10px;
+        border: 1px solid var(--border);
+        font-size: 11px; font-weight: 700;
+        }
+        .pill-priority { background: rgba(122,162,255,0.14); color: #dbe6ff; border-color: rgba(122,162,255,0.28); }
+        .table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(0,0,0,0.18);
+        }
+        .table th, .table td {
+        padding: 10px 10px;
+        border-bottom: 1px solid rgba(255,255,255,0.10);
+        vertical-align: top;
+        font-size: 12.5px;
+        line-height: 1.35;
+        }
+        .table th {
+        text-align: left;
+        color: #e6eeff;
+        font-size: 12px;
+        background: rgba(255,255,255,0.04);
+        }
+        .table tr:last-child td { border-bottom: none; }
+        .cols-6 { grid-column: span 6; }
+        .cols-4 { grid-column: span 4; }
+        .cols-8 { grid-column: span 8; }
+        .cols-12 { grid-column: span 12; }
+        ul { margin: 8px 0 0 18px; color: var(--fg); }
+        li { margin: 4px 0; }
+        .hr { height: 1px; background: rgba(255,255,255,0.12); margin: 14px 0; }
+        pre {
+        background: rgba(0,0,0,0.35);
+        border: 1px solid rgba(255,255,255,0.12);
+        padding: 12px;
+        border-radius: 14px;
+        overflow: auto;
+        color: var(--fg);
+        }
+        .footer { margin-top: 18px; color: var(--muted); font-size: 12px; }
+    </style>
+    </head>
+
+    <body>
+    <div class="container">
+    <div class="topbar">
+        <div>
+        <div class="title">CARE-CRITIC Clinical Critique Report</div>
+        <div class="subtitle">Generated: 2026-02-16 13:38:28 · Patient ID: <span class="mono">22222222</span></div>
+        </div>
+        <div class="muted mono">This report is automatically generated for quality improvement / research use. It is not medical advice and must not be used for direct clinical decision-making.</div>
+    </div>
+
+    <div class="grid">
+        <div class="card cols-6">
+        <h3>Case Summary</h3>
+        <div class="kv">
+            <div class="k">Chief complaint</div><div class="v">Altered mental status</div>
+            <div class="k">Demographics</div><div class="v">F</div>
+            <div class="k">Vitals</div>
+            <div class="v">
+            T 98.2 · BP 116/50 · HR 86 · RR 18 · SpO2 96% (room air)
+            </div>
+            <div class="k">Key symptoms</div>
+            <div class="v">
+            Resp: dyspnea /
+            Systemic: confusion
+            </div>
+        </div>
+        </div>
+
+        <div class="card cols-6">
+        <h3>Outcome</h3>
+        <div class="kv">
+            <div class="k">Status</div><div class="v">expired</div>
+            <div class="k">Cause of death</div><div class="v">Iatrogenic hemoperitoneum</div>
+            <div class="k">Safety assessment</div><div class="v">unsafe</div>
+            <div class="k">Confidence</div><div class="v">0.8</div>
+        </div>
+        <div class="hr"></div>
+        <div class="muted">
+            Death-cause mismatch:
+            <span class="mono">True</span>
+            · Admission reason: <span class="mono">Hepatic encephalopathy</span>
+        </div>
+        </div>
+
+        <div class="card cols-12">
+        <h3>Timeline (Key Events)</h3>
+        <ul><li>Hepatic encephalopathy suspected due to benzodiazepines</li><li>Hypotension after paracentesis</li><li>Resuscitation with saline boluses</li><li>Pressors started</li><li>Massive transfusion protocol activated</li><li>Blind paracentesis performed</li><li>Puncture site bleeding</li><li>Hct dropped to 9</li></ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Key Critique Points</h2>
+        <div class="card">
+        
+        <table class="table">
+        <thead>
+            <tr>
+            <th>#</th><th>Severity</th><th>Category</th><th>Finding</th><th>Evidence</th><th>Cohort comparison</th>
+            </tr>
+        </thead>
+        <tbody>
+        <tr>
+            <td class="mono">1</td>
+            <td><span class="sev sev-critical">CRITICAL</span></td>
+            <td>process</td>
+            <td>The patient underwent a blind paracentesis without ultrasound guidance, leading to iatrogenic hemoperitoneum and significant bleeding, as evidenced by the drop in hematocrit to 9 and puncture site bleeding.</td>
+            <td class="mono">E6 | E9</td>
+            <td>In similar cases, ultrasound guidance is routinely employed to prevent such complications.</td>
+        </tr>
+        
+        <tr>
+            <td class="mono">2</td>
+            <td><span class="sev sev-critical">CRITICAL</span></td>
+            <td>process</td>
+            <td>There is a critical mismatch between the admission diagnosis of hepatic encephalopathy and the actual cause of death, which was iatrogenic hemoperitoneum following the paracentesis. This misalignment indicates a failure to recognize the procedural risks involved.</td>
+            <td class="mono">E4 | E9</td>
+            <td>Other cases with similar presentations were managed with more caution, avoiding high-risk procedures without proper imaging.</td>
+        </tr>
+        
+        <tr>
+            <td class="mono">3</td>
+            <td><span class="sev sev-medium">MEDIUM</span></td>
+            <td>process</td>
+            <td>The administration of benzodiazepines (Ativan and Lorazepam) in a patient with suspected hepatic encephalopathy likely worsened her mental status, contradicting clinical guidelines that recommend avoiding such medications in this context.</td>
+            <td class="mono">E7 | record_uncertainty</td>
+            <td>In comparable cases, safer alternatives were chosen for sedation in patients with hepatic encephalopathy.</td>
+        </tr>
+        </tbody>
+        </table>
+        
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Top Failure Modes (Ranked)</h2>
+        <div class="card">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Severity</th><th>Category</th><th>Issue</th><th>Evidence</th><th>Cohort / Notes</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr><td><span class="sev sev-critical">CRITICAL</span></td><td>process</td><td>The patient underwent a blind paracentesis without ultrasound guidance, leading to iatrogenic hemoperitoneum and significant bleeding, as evidenced by the drop in hematocrit to 9 and puncture site bleeding.</td><td class='mono'>E6 | E9</td><td>In similar cases, ultrasound guidance is routinely employed to prevent such complications.</td></tr><tr><td><span class="sev sev-critical">CRITICAL</span></td><td>process</td><td>There is a critical mismatch between the admission diagnosis of hepatic encephalopathy and the actual cause of death, which was iatrogenic hemoperitoneum following the paracentesis. This misalignment indicates a failure to recognize the procedural risks involved.</td><td class='mono'>E4 | E9</td><td>Other cases with similar presentations were managed with more caution, avoiding high-risk procedures without proper imaging.</td></tr><tr><td><span class="sev sev-critical">CRITICAL</span></td><td>iatrogenic_trauma</td><td>Blind paracentesis led to iatrogenic hemoperitoneum and significant bleeding.</td><td class='mono'>Blind paracentesis performed; Puncture site bleeding; Hct dropped to 9</td><td></td></tr><tr><td><span class="sev sev-critical">CRITICAL</span></td><td>death_alignment</td><td>Mismatch between admission diagnosis of hepatic encephalopathy and actual cause of death, which was iatrogenic hemoperitoneum.</td><td class='mono'>입원 사유: Hepatic encephalopathy; 사망 원인: Iatrogenic hemoperitoneum</td><td></td></tr><tr><td><span class="sev sev-medium">MEDIUM</span></td><td>process</td><td>The administration of benzodiazepines (Ativan and Lorazepam) in a patient with suspected hepatic encephalopathy likely worsened her mental status, contradicting clinical guidelines that recommend avoiding such medications in this context.</td><td class='mono'>E7 | record_uncertainty</td><td>In comparable cases, safer alternatives were chosen for sedation in patients with hepatic encephalopathy.</td></tr><tr><td><span class="sev sev-medium">MEDIUM</span></td><td>procedural_safety</td><td>Resuscitation with normal saline instead of albumin after paracentesis in a cirrhotic patient.</td><td class='mono'>Resuscitation was initiated with 0.9% Normal Saline boluses (4L total) instead of Albumin</td><td></td></tr><tr><td><span class="sev sev-medium">MEDIUM</span></td><td>medication_error</td><td>Continued use of Lorazepam in a patient with hepatic encephalopathy likely worsened her mental status.</td><td class='mono'>Lorazepam was continued prn for agitation during the first 24 hours of admission</td><td></td></tr>
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Corrective Actions (Solutions)</h2>
+        <div class="card">
+        
+        <table class="table">
+        <thead>
+            <tr>
+            <th>#</th><th>Priority</th><th>Targets</th><th>Recommended action</th><th>Reference</th>
+            </tr>
+        </thead>
+        <tbody>
+        <tr>
+            <td class="mono">1</td>
+            <td><span class="pill pill-priority">MEDIUM</span></td>
+            <td></td>
+            <td>Implement ultrasound guidance for paracentesis in patients with complex medical histories to prevent complications.</td>
+            <td class="mono">Critic recommendation</td>
+        </tr>
+        
+        <tr>
+            <td class="mono">2</td>
+            <td><span class="pill pill-priority">MEDIUM</span></td>
+            <td></td>
+            <td>Avoid the use of benzodiazepines in patients with hepatic encephalopathy and consider alternative sedatives.</td>
+            <td class="mono">Critic recommendation</td>
+        </tr>
+        
+        <tr>
+            <td class="mono">3</td>
+            <td><span class="pill pill-priority">MEDIUM</span></td>
+            <td></td>
+            <td>Ensure timely activation of the massive transfusion protocol and immediate correction of coagulopathy in patients showing signs of significant bleeding.</td>
+            <td class="mono">Critic recommendation</td>
+        </tr>
+        </tbody>
+        </table>
+        
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Clinical Reasoning Checks</h2>
+        <div class="grid">
+        <div class="card cols-6">
+            <h3>Diagnosis Analysis</h3>
+            <div class="kv">
+            <div class="k">Evaluation</div><div class="v">부분적절</div>
+            <div class="k">Timing assessment</div><div class="v">The critical events leading to death occurred after the blind paracentesis, indicating a direct link between the procedure and the patient&#x27;s decline.</div>
+            <div class="k">Outcome analysis</div><div class="v">The patient&#x27;s death was primarily due to iatrogenic hemoperitoneum caused by the blind paracentesis, not the hepatic encephalopathy for which she was admitted.</div>
+            </div>
+        </div>
+
+        <div class="card cols-6">
+            <h3>Treatment Analysis</h3>
+            <div class="kv">
+            <div class="k">Evaluation</div><div class="v">부적절</div>
+            <div class="k">Guideline adherence</div><div class="v">The treatment does not adhere to guidelines for managing hepatic encephalopathy, which recommend avoiding benzodiazepines.</div>
+            </div>
+            <div class="hr"></div>
+            <div class="muted">Medication issues</div>
+            <ul><li>Benzodiazepines such as Ativan and Lorazepam are generally contraindicated in hepatic encephalopathy due to their potential to worsen mental status. Their use in this patient is inappropriate given the diagnosis.</li></ul>
+        </div>
+
+        <div class="card cols-12">
+            <h3>Recommended Clinical Next Steps (from analysis)</h3>
+            <ul><li>Discontinue benzodiazepines and consider alternative sedatives that are safer for patients with hepatic encephalopathy.</li><li>Initiate treatment with lactulose or rifaximin to reduce ammonia levels and manage hepatic encephalopathy.</li><li>Monitor the patient&#x27;s mental status closely and consider ICU admission if there is no improvement.</li><li>Evaluate for potential complications such as aspiration pneumonia and manage accordingly.</li></ul>
+        </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Uncertainty & Alternative Explanations</h2>
+        <div class="grid">
+        <div class="card cols-6">
+            <h3>Alternative explanations</h3>
+            <ul><li>The patient&#x27;s altered mental status and subsequent decline could have been exacerbated by the inappropriate use of benzodiazepines, which are known to worsen hepatic encephalopathy.</li><li>The iatrogenic hemoperitoneum from the blind paracentesis may have contributed significantly to the patient&#x27;s rapid deterioration and eventual death, overshadowing the initial diagnosis of hepatic encephalopathy.</li></ul>
+        </div>
+        <div class="card cols-6">
+            <h3>Uncertainty notes</h3>
+            <ul><li>The absence of similar cases makes it challenging to draw definitive conclusions about the interplay of factors leading to the patient&#x27;s outcome.</li><li>The critique confidence is moderate, indicating some uncertainty in the evaluation of the case details and their implications.</li></ul>
+        </div>
+        <div class="card cols-12">
+            <h3>Caveats</h3>
+            <ul><li>The patient&#x27;s complex medical history and multiple interventions make it difficult to isolate a single cause of deterioration.</li><li>The lack of ultrasound guidance during paracentesis is a significant procedural oversight that may have influenced the outcome.</li></ul>
+        </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Evidence Appendix</h2>
+        <div class="card">
+        <div class="muted">Evidence spans extracted from source note (indexed as E1..En)</div>
+        <div style="margin-top:10px;"><table class='table'><thead><tr><th>ID</th><th>Field</th><th>Text span</th></tr></thead><tbody><tr><td class='mono'>E1</td><td>chief_complaint</td><td class='mono'>Chief Complaint: Altered mental status</td></tr><tr><td class='mono'>E2</td><td>vitals</td><td class='mono'>Vitals- 98.2, 116/50, 86, 18, 96%RA</td></tr><tr><td class='mono'>E3</td><td>symptoms</td><td class='mono'>presents from her living facility with SOB and altered mental status</td></tr><tr><td class='mono'>E4</td><td>red_flags</td><td class='mono'>Despite altered mental status and known cirrhosis</td></tr><tr><td class='mono'>E5</td><td>laboratory</td><td class='mono'>ADMISSION LABS ___ 05:05PM BLOOD WBC-3.3*</td></tr><tr><td class='mono'>E6</td><td>procedures_performed</td><td class='mono'>On the day she expired, she underwent bedside paracentesis for tense ascites. Procedure was performed blindly without ultrasound guidance</td></tr><tr><td class='mono'>E7</td><td>interventions_given</td><td class='mono'>Despite altered mental status and known cirrhosis, patient received 2mg IV Ativan for agitation</td></tr><tr><td class='mono'>E8</td><td>clinical_course</td><td class='mono'>Neuro- AMS/hepatic encephalopathy- Suspect hepatic encephalopathy triggered by recent initiation of benzodiazepines at nursing home.</td></tr><tr><td class='mono'>E9</td><td>outcome</td><td class='mono'>Decompensated Cirrhosis Iatrogenic Hemoperitoneum</td></tr></tbody></table></div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Generated by CARE-CRITIC pipeline · For QI / research only.
+    </div>
+    </div>
+    </body>
+    </html>
+    
