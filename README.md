@@ -1,5 +1,5 @@
 # CARE-CRITIC
-👉 [Report View](https://raw.githack.com/kimdappi/LGBM/main/report.html)      📺 [Youtube link](https://youtu.be/8YbbjmHOeNc)
+👉 [Report View](https://raw.githack.com/kimdappi/LGBM/main/assets/report.html)      📺 [Youtube link](https://youtu.be/8YbbjmHOeNc)
 
 **AI-Powered M&M Conference System with Episodic Memory**
 
